@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Toaster, toast } from 'sonner';
 import { INITIAL_VIOLATIONS, MOCK_STUDENTS, MOCK_USERS, INITIAL_VIOLATION_TYPES, THEMES, DEFAULT_APP_CONFIG, DEFAULT_LOGO_URL } from './constants';
 import { Student, User, UserRole, ViolationRecord, ViolationType, ThemeName, AppTheme, AppConfig, UserActivityLog, ViolationCategory } from './types';
@@ -224,6 +224,10 @@ const App: React.FC = () => {
   
   const [activeTab, setActiveTab] = useState<'dashboard' | 'input' | 'students' | 'evidence' | 'settings'>('dashboard');
   const [isResetModalOpen, setIsResetModalOpen] = useState<boolean>(false);
+  const [isResetLogoModalOpen, setIsResetLogoModalOpen] = useState<boolean>(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState<boolean>(false);
+  const isSavingLogoRef = useRef<boolean>(false);
+  const isEditingConfigRef = useRef<boolean>(false);
   const [violations, setViolations] = useState<ViolationRecord[]>(() => {
     const saved = localStorage.getItem('siPersis_violations');
     if (saved !== null) {
@@ -352,10 +356,20 @@ const App: React.FC = () => {
         // Real-time Settings Listener (Identitas sekolah & setting sama di semua akun)
         unsubscribeSettings = subscribeToSettings((remoteConfig) => {
           if (remoteConfig && remoteConfig.schoolName) {
-            setAppConfig(remoteConfig);
-            setTempConfig(remoteConfig);
-            if (remoteConfig.theme) {
-              setThemeName(remoteConfig.theme);
+            const mergedConfig: AppConfig = { ...DEFAULT_APP_CONFIG, ...remoteConfig };
+            if (isSavingLogoRef.current) {
+              // Avoid overwriting a logo upload that is currently being saved to Firestore
+              setAppConfig(prev => ({ ...mergedConfig, logoUrl: prev.logoUrl }));
+              return;
+            }
+            setAppConfig(mergedConfig);
+            setTempConfig(prev =>
+              isEditingConfigRef.current
+                ? { ...prev, logoUrl: mergedConfig.logoUrl, theme: mergedConfig.theme }
+                : mergedConfig
+            );
+            if (mergedConfig.theme) {
+              setThemeName(mergedConfig.theme);
             }
           }
         });
@@ -414,9 +428,17 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Save config to local storage whenever it changes
+  // Save config to local storage and sync favicon whenever appConfig changes
   useEffect(() => {
-    localStorage.setItem('appConfig', JSON.stringify(appConfig));
+    try {
+      localStorage.setItem('appConfig', JSON.stringify(appConfig));
+    } catch (err) {
+      console.warn('Failed to save appConfig to localStorage:', err);
+    }
+    const favicon = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
+    if (favicon && appConfig.logoUrl) {
+      favicon.href = appConfig.logoUrl;
+    }
   }, [appConfig]);
 
   // User Auth Handlers
@@ -901,12 +923,19 @@ const App: React.FC = () => {
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     const configToSave = { ...tempConfig, theme: themeName };
+    isEditingConfigRef.current = false;
     setAppConfig(configToSave);
+    try {
+      localStorage.setItem('appConfig', JSON.stringify(configToSave));
+    } catch {
+      // ignore storage quota warning
+    }
     try {
       await saveCloudSettings(configToSave);
       toast.success("Pengaturan sekolah berhasil disimpan dan disinkronkan ke seluruh akun!");
     } catch (err) {
-      toast.success("Pengaturan aplikasi berhasil disimpan secara lokal!");
+      console.error('Failed to save settings to Cloud Firestore:', err);
+      toast.error("Pengaturan tersimpan di perangkat ini, namun gagal sinkron ke Cloud Firestore.");
     }
 
     logActivity({
@@ -921,19 +950,112 @@ const App: React.FC = () => {
     });
   };
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-         toast.error("Ukuran file terlalu besar. Maksimal 2MB.");
-         return;
-      }
+  // Resize and compress uploaded logo so it safely fits Firestore 1MB limit while staying crisp
+  const compressLogoImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setTempConfig(prev => ({ ...prev, logoUrl: reader.result as string }));
-        toast.info("Logo berhasil diunggah (klik simpan untuk menerapkan)");
+      reader.onerror = () => reject(new Error('Gagal membaca file gambar.'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('Format gambar tidak valid atau file rusak.'));
+        img.onload = () => {
+          const MAX_DATA_URL_LENGTH = 450000; // ~330KB binary, safe for Firestore 1MB doc limit
+          const renderAtSize = (maxDim: number, mime: string, quality?: number): string => {
+            const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+            const width = Math.max(1, Math.round((img.width || maxDim) * scale));
+            const height = Math.max(1, Math.round((img.height || maxDim) * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return reader.result as string;
+            if (mime === 'image/jpeg') {
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, width, height);
+            }
+            ctx.drawImage(img, 0, 0, width, height);
+            return canvas.toDataURL(mime, quality);
+          };
+
+          // 1. Try 400px PNG (preserves transparency & matches jsPDF PNG)
+          let result = renderAtSize(400, 'image/png');
+          if (result.length <= MAX_DATA_URL_LENGTH) return resolve(result);
+
+          // 2. Try 280px PNG
+          result = renderAtSize(280, 'image/png');
+          if (result.length <= MAX_DATA_URL_LENGTH) return resolve(result);
+
+          // 3. Try 320px WebP (preserves transparency with much smaller payload)
+          const webpResult = renderAtSize(320, 'image/webp', 0.85);
+          if (webpResult.startsWith('data:image/webp') && webpResult.length <= MAX_DATA_URL_LENGTH) {
+            return resolve(webpResult);
+          }
+
+          // 4. Fallback to 320px JPEG
+          result = renderAtSize(320, 'image/jpeg', 0.82);
+          if (result.length <= MAX_DATA_URL_LENGTH) return resolve(result);
+
+          result = renderAtSize(240, 'image/jpeg', 0.7);
+          resolve(result);
+        };
+        img.src = reader.result as string;
       };
       reader.readAsDataURL(file);
+    });
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error("File harus berupa gambar (PNG, JPG, WEBP, atau SVG).");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("Ukuran file terlalu besar. Maksimal 10MB.");
+      return;
+    }
+
+    setIsUploadingLogo(true);
+    isSavingLogoRef.current = true;
+    try {
+      const compressedLogoUrl = await compressLogoImage(file);
+      const updatedConfig: AppConfig = {
+        ...appConfig,
+        ...tempConfig,
+        logoUrl: compressedLogoUrl,
+        theme: themeName,
+      };
+
+      setTempConfig(updatedConfig);
+      setAppConfig(updatedConfig);
+      try {
+        localStorage.setItem('appConfig', JSON.stringify(updatedConfig));
+      } catch {
+        // ignore storage quota warning
+      }
+
+      await saveCloudSettings(updatedConfig);
+      toast.success("Logo sekolah berhasil diunggah dan langsung tersimpan ke Cloud!");
+
+      logActivity({
+        userId: currentUser?.id || 'anon',
+        userName: currentUser?.name || 'Admin',
+        userRole: currentUser?.role || UserRole.ADMIN,
+        userAvatar: currentUser?.avatar,
+        action: 'SETTINGS_UPDATE',
+        title: 'Pembaruan Logo Sekolah',
+        details: `Mengunggah logo sekolah baru untuk ${updatedConfig.schoolName}`,
+        device: 'Browser Web'
+      });
+    } catch (err) {
+      console.error('Logo upload/sync error:', err);
+      toast.error("Logo gagal disinkronkan ke Cloud Firestore. Periksa koneksi atau format gambar.");
+    } finally {
+      isSavingLogoRef.current = false;
+      setIsUploadingLogo(false);
     }
   };
 
@@ -983,9 +1105,32 @@ const App: React.FC = () => {
   };
 
   const handleResetLogo = () => {
-    if(confirm("Kembalikan logo ke default?")) {
-       setTempConfig(prev => ({ ...prev, logoUrl: DEFAULT_LOGO_URL }));
-       toast.info("Logo dikembalikan ke default (klik simpan untuk menerapkan)");
+    setIsResetLogoModalOpen(true);
+  };
+
+  const executeResetLogo = async () => {
+    isSavingLogoRef.current = true;
+    const updatedConfig: AppConfig = {
+      ...appConfig,
+      ...tempConfig,
+      logoUrl: DEFAULT_LOGO_URL,
+      theme: themeName,
+    };
+    setTempConfig(updatedConfig);
+    setAppConfig(updatedConfig);
+    try {
+      localStorage.setItem('appConfig', JSON.stringify(updatedConfig));
+    } catch {
+      // ignore
+    }
+    try {
+      await saveCloudSettings(updatedConfig);
+      toast.success("Logo dikembalikan ke default dan disinkronkan ke Cloud!");
+    } catch (err) {
+      console.error('Reset logo sync error:', err);
+      toast.error("Logo dikembalikan secara lokal, namun gagal sinkron ke Cloud Firestore.");
+    } finally {
+      isSavingLogoRef.current = false;
     }
   };
 
@@ -1315,7 +1460,15 @@ const App: React.FC = () => {
                       </h4>
                       <p className="text-xs text-slate-500 mt-1">Sesuaikan identitas sekolah dan aplikasi untuk tampilan dashboard dan hasil cetak.</p>
                     </div>
-                    <form onSubmit={handleSaveConfig} className="p-6 bg-white">
+                    <form
+                      onSubmit={handleSaveConfig}
+                      onChange={(e) => {
+                        if ((e.target as HTMLInputElement).type !== 'file') {
+                          isEditingConfigRef.current = true;
+                        }
+                      }}
+                      className="p-6 bg-white"
+                    >
                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                           <div>
                             <label className="block text-sm font-bold text-slate-800 mb-1.5">Nama Sekolah</label>
@@ -1339,10 +1492,10 @@ const App: React.FC = () => {
                           {/* Logo Upload Section */}
                           <div className="md:col-span-2">
                             <label className="block text-sm font-bold text-slate-800 mb-2">Logo Sekolah</label>
-                            <div className="flex items-start gap-6 p-4 border border-slate-200 rounded-xl bg-slate-50/50">
-                               <div className="flex flex-col items-center gap-2">
+                            <div className="flex flex-col sm:flex-row items-start gap-6 p-4 border border-slate-200 rounded-xl bg-slate-50/50">
+                               <div className="flex flex-col items-center gap-2 shrink-0">
                                   <div className="w-24 h-24 rounded-lg bg-white border border-slate-200 flex items-center justify-center p-2 shadow-sm">
-                                     <img src={tempConfig.logoUrl} alt="Preview" className="w-full h-full object-contain" />
+                                     <img src={tempConfig.logoUrl || DEFAULT_LOGO_URL} alt="Preview" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                                   </div>
                                   <div className="flex flex-col items-center gap-1 w-full">
                                     <a 
@@ -1358,20 +1511,29 @@ const App: React.FC = () => {
                                     <button 
                                       type="button" 
                                       onClick={handleResetLogo}
-                                      className="text-[11px] text-red-500 flex items-center gap-1 hover:underline font-medium"
+                                      disabled={isUploadingLogo}
+                                      className="text-[11px] text-red-500 flex items-center gap-1 hover:underline font-medium cursor-pointer disabled:opacity-50"
                                     >
                                       <RefreshCcw className="w-3 h-3" /> Reset Default
                                     </button>
                                   </div>
                                </div>
-                               <div className="flex-1">
-                                  <label className="block w-full border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:bg-white hover:border-blue-400 transition-colors cursor-pointer group">
+                               <div className="flex-1 w-full">
+                                  <label className={`block w-full border-2 border-dashed border-slate-300 rounded-xl p-6 text-center transition-colors group ${isUploadingLogo ? 'opacity-60 cursor-wait bg-slate-100' : 'hover:bg-white hover:border-blue-400 cursor-pointer'}`}>
                                      <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-2 group-hover:bg-blue-50">
-                                       <Upload className="w-5 h-5 text-slate-400 group-hover:text-blue-500" />
+                                       {isUploadingLogo ? (
+                                         <RefreshCw className="w-5 h-5 text-blue-500 animate-spin" />
+                                       ) : (
+                                         <Upload className="w-5 h-5 text-slate-400 group-hover:text-blue-500" />
+                                       )}
                                      </div>
-                                     <span className="text-sm font-bold text-slate-700 group-hover:text-blue-600 block">Klik untuk Upload Logo Baru</span>
-                                     <span className="text-xs text-slate-400 block mt-1">Format: PNG, JPG, GIF (Max 2MB)</span>
-                                     <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+                                     <span className="text-sm font-bold text-slate-700 group-hover:text-blue-600 block">
+                                       {isUploadingLogo ? 'Mengoptimalkan & Menyimpan Logo...' : 'Klik untuk Upload Logo Baru'}
+                                     </span>
+                                     <span className="text-xs text-slate-400 block mt-1">
+                                       Format: PNG, JPG, WEBP, SVG (Max 10MB • Otomatis tersimpan &amp; sinkron ke Cloud)
+                                     </span>
+                                     <input type="file" accept="image/*" onChange={handleLogoUpload} disabled={isUploadingLogo} className="hidden" />
                                   </label>
                                </div>
                             </div>
@@ -1800,6 +1962,20 @@ const App: React.FC = () => {
         }
         variant="danger"
         confirmText="Ya, Reset Total Sekarang"
+      />
+
+      {/* Reset Logo Confirm Modal */}
+      <ConfirmModal
+        isOpen={isResetLogoModalOpen}
+        onClose={() => setIsResetLogoModalOpen(false)}
+        onConfirm={() => {
+          executeResetLogo();
+          setIsResetLogoModalOpen(false);
+        }}
+        title="Kembalikan Logo Default"
+        message="Apakah Anda yakin ingin mengembalikan logo sekolah ke logo bawaan sistem? Perubahan akan langsung diterapkan dan disinkronkan ke seluruh akun."
+        variant="warning"
+        confirmText="Ya, Kembalikan Default"
       />
 
       {/* Detail Modal */}

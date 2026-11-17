@@ -164,7 +164,10 @@ export function subscribeToActivities(onData: (activities: UserActivityLog[]) =>
 
 // Data synchronization mutations
 export async function saveCloudSettings(config: AppConfig) {
-  await setDoc(doc(db, 'settings', 'app_config'), config);
+  const cleanConfig = Object.fromEntries(
+    Object.entries(config).filter(([_, v]) => v !== undefined)
+  );
+  await setDoc(doc(db, 'settings', 'app_config'), cleanConfig);
 }
 
 export async function saveCloudStudent(student: Student) {

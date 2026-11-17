@@ -64,9 +64,15 @@ export const drawPdfKopSurat = async (
   const logoSize = 25; // 25mm
   const logoY = startY + 1;
 
+  const getImageFormat = (url: string): 'PNG' | 'JPEG' | 'WEBP' => {
+    if (url.startsWith('data:image/jpeg') || url.startsWith('data:image/jpg')) return 'JPEG';
+    if (url.startsWith('data:image/webp')) return 'WEBP';
+    return 'PNG';
+  };
+
   if (provImg) {
     try {
-      doc.addImage(provImg, 'PNG', leftMargin, logoY, logoSize, logoSize);
+      doc.addImage(provImg, getImageFormat(provLogoUrl), leftMargin, logoY, logoSize, logoSize);
     } catch (e) {
       console.warn('Failed to add prov logo to doc', e);
     }
@@ -74,7 +80,7 @@ export const drawPdfKopSurat = async (
 
   if (schoolImg) {
     try {
-      doc.addImage(schoolImg, 'PNG', rightMargin - logoSize, logoY, logoSize, logoSize);
+      doc.addImage(schoolImg, getImageFormat(schoolLogoUrl), rightMargin - logoSize, logoY, logoSize, logoSize);
     } catch (e) {
       console.warn('Failed to add school logo to doc', e);
     }
