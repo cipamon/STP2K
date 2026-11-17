@@ -1,0 +1,10 @@
+{
+  "name": "Copy of SiPerSis - Sistem Informasi Pelanggaran Reward Siswa",
+  "description": "Aplikasi pencatatan pelanggaran dan prestasi siswa dengan fitur analisis AI Gemini, manajemen bukti foto, sinkronisasi Cloud Firestore real-time di semua akun, dan audit trail.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

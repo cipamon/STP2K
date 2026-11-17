@@ -1,0 +1,110 @@
+{
+  "entities": {
+    "Student": {
+      "title": "Student",
+      "description": "Student record in the school",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nis": { "type": "string" },
+        "nisn": { "type": "string" },
+        "name": { "type": "string" },
+        "class": { "type": "string" },
+        "gender": { "type": "string" },
+        "totalPoints": { "type": "number" },
+        "parentPhone": { "type": "string" },
+        "avatar": { "type": "string" }
+      },
+      "required": ["id", "nis", "name", "class", "totalPoints"]
+    },
+    "Violation": {
+      "title": "Violation",
+      "description": "Violation or achievement record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentClass": { "type": "string" },
+        "date": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "points": { "type": "number" },
+        "reporterName": { "type": "string" },
+        "evidenceUrl": { "type": "string" }
+      },
+      "required": ["id", "studentId", "studentName", "studentClass", "date", "description", "category", "points", "reporterName"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User account for admin and teachers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string" },
+        "nip": { "type": "string" },
+        "avatar": { "type": "string" }
+      },
+      "required": ["id", "name", "username", "password", "role"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Audit trail log of user actions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string" },
+        "userAvatar": { "type": "string" },
+        "action": { "type": "string" },
+        "title": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "device": { "type": "string" }
+      },
+      "required": ["id", "userId", "userName", "userRole", "action", "title", "timestamp"]
+    },
+    "AppConfig": {
+      "title": "AppConfig",
+      "description": "School and application configuration",
+      "type": "object",
+      "properties": {
+        "schoolName": { "type": "string" },
+        "schoolAddress": { "type": "string" },
+        "headmasterName": { "type": "string" },
+        "headmasterNip": { "type": "string" },
+        "academicYear": { "type": "string" },
+        "theme": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "contactPhone": { "type": "string" }
+      },
+      "required": ["schoolName", "academicYear", "theme"]
+    }
+  },
+  "firestore": {
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Collection of students"
+    },
+    "/violations/{violationId}": {
+      "schema": "Violation",
+      "description": "Collection of violation and reward records"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Collection of authorized users and credentials"
+    },
+    "/activities/{activityId}": {
+      "schema": "ActivityLog",
+      "description": "Collection of user activity logs"
+    },
+    "/settings/{settingDocId}": {
+      "schema": "AppConfig",
+      "description": "System settings document"
+    }
+  }
+}
