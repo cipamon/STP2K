@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Toaster, toast } from 'sonner';
-import { INITIAL_VIOLATIONS, MOCK_STUDENTS, MOCK_USERS, INITIAL_VIOLATION_TYPES, THEMES, DEFAULT_APP_CONFIG, DEFAULT_LOGO_URL } from './constants';
-import { Student, User, UserRole, ViolationRecord, ViolationType, ThemeName, AppTheme, AppConfig, UserActivityLog, ViolationCategory } from './types';
+import { INITIAL_VIOLATIONS, MOCK_STUDENTS, MOCK_USERS, INITIAL_VIOLATION_TYPES, THEMES, DEFAULT_APP_CONFIG, DEFAULT_LOGO_URL, DEFAULT_KOP_STYLE, DEFAULT_PRINT_SETTINGS, DEFAULT_SIGNATURE_STYLE } from './constants';
+import { Student, User, UserRole, ViolationRecord, ViolationType, ThemeName, AppTheme, AppConfig, UserActivityLog, ViolationCategory, PrintDocumentSettings, PrintFontFamily, PrintTextAlign, SignatureBoxPosition } from './types';
 import { INITIAL_ACTIVITIES } from './utils/activityLogger';
 import ViolationForm from './components/ViolationForm';
 import Dashboard from './components/Dashboard';
@@ -10,7 +10,18 @@ import UserManagement from './components/UserManagement';
 import ViolationTypeManagement from './components/ViolationTypeManagement';
 import StudentDetailModal from './components/StudentDetailModal';
 import EvidenceGallery from './components/EvidenceGallery';
+import ReportCenter from './components/ReportCenter';
 import { KopSurat } from './components/KopSurat';
+import { KopStyleEditor } from './components/KopStyleEditor';
+import AcademicYearManager from './components/AcademicYearManager';
+import { resolvePrintSettings } from './utils/pdfKop';
+import {
+  DEFAULT_ACADEMIC_YEARS,
+  getRecordAcademicYear,
+  matchesAcademicYear,
+  normalizeAcademicYearFormat,
+  sortAcademicYears,
+} from './utils/academicYear';
 import { 
   testFirestoreConnection, 
   seedInitialCloudDataIfNeeded, 
@@ -31,12 +42,14 @@ import {
   bulkDeleteCloudViolations,
   clearAllCloudViolations,
   saveCloudUser, 
+  bulkSaveCloudUsers,
   deleteCloudUser, 
   bulkDeleteCloudUsers,
   saveCloudActivity, 
   clearCloudActivities, 
   resetCloudAllSampleData 
 } from './services/firebase';
+import { getDefaultUserAvatar, getUserAvatar } from './utils/avatarHelpers';
 import ConfirmModal from './components/ConfirmModal';
 import { 
   sendViolationToExternalWebhook, 
@@ -49,7 +62,7 @@ import {
   LayoutDashboard, Users, FileText, Settings, LogOut, Menu, Lock, User as UserIcon, 
   ArrowRight, Sparkles, Eye, EyeOff, CheckSquare, Palette, Globe, Save, Upload, 
   RefreshCcw, Trash2, RotateCcw, ArrowDownCircle, Images, Cloud, CloudCheck, RefreshCw, 
-  Link as LinkIcon, Send, Copy, ExternalLink, HelpCircle, Check, FileSpreadsheet, AlertTriangle, X 
+  Link as LinkIcon, Send, Copy, ExternalLink, HelpCircle, Check, FileSpreadsheet, AlertTriangle, X, Calendar, Printer 
 } from 'lucide-react';
 
 // Login Component
@@ -209,12 +222,43 @@ const App: React.FC = () => {
         if (!logo || logo.includes('facebook') || logo.includes('instagram') || logo.includes('fbcdn') || logo.includes('1789110535581') || logo === '/logo.png') {
           logo = DEFAULT_LOGO_URL;
         }
-        // Automatically migrate previous defaults to new default '2026 / 2027'
+        // Keep configured academic year unless missing or invalid placeholder
         let academicYear = parsed.academicYear;
-        if (academicYear === '2025 / 2026' || academicYear === '2026 / 2026' || !academicYear) {
+        if (academicYear === '2026 / 2026' || !academicYear) {
           academicYear = DEFAULT_APP_CONFIG.academicYear;
+        } else {
+          academicYear = normalizeAcademicYearFormat(academicYear);
         }
-        return { ...DEFAULT_APP_CONFIG, ...parsed, logoUrl: logo, academicYear };
+        const academicYears = sortAcademicYears([
+          ...DEFAULT_ACADEMIC_YEARS,
+          ...(Array.isArray(parsed.academicYears) ? parsed.academicYears : []),
+          academicYear,
+        ]);
+        const mergedPrintSettings: PrintDocumentSettings = {
+          ...DEFAULT_PRINT_SETTINGS,
+          ...(parsed.printSettings || {}),
+          kopStyle: {
+            fontFamily: parsed.printSettings?.kopStyle?.fontFamily || DEFAULT_KOP_STYLE.fontFamily,
+            line1: { ...DEFAULT_KOP_STYLE.line1, ...(parsed.printSettings?.kopStyle?.line1 || {}) },
+            line2: { ...DEFAULT_KOP_STYLE.line2, ...(parsed.printSettings?.kopStyle?.line2 || {}) },
+            line3: { ...DEFAULT_KOP_STYLE.line3, ...(parsed.printSettings?.kopStyle?.line3 || {}) },
+            line4: { ...DEFAULT_KOP_STYLE.line4, ...(parsed.printSettings?.kopStyle?.line4 || {}) },
+            line5: { ...DEFAULT_KOP_STYLE.line5, ...(parsed.printSettings?.kopStyle?.line5 || {}) },
+            line6: { ...DEFAULT_KOP_STYLE.line6, ...(parsed.printSettings?.kopStyle?.line6 || {}) },
+          },
+          signatureStyle: {
+            ...DEFAULT_SIGNATURE_STYLE,
+            ...(parsed.printSettings?.signatureStyle || {}),
+          },
+        };
+        return {
+          ...DEFAULT_APP_CONFIG,
+          ...parsed,
+          logoUrl: logo,
+          academicYear,
+          academicYears,
+          printSettings: mergedPrintSettings,
+        };
       } catch (e) {
         return DEFAULT_APP_CONFIG;
       }
@@ -222,7 +266,9 @@ const App: React.FC = () => {
     return DEFAULT_APP_CONFIG;
   });
   
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'input' | 'students' | 'evidence' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'input' | 'students' | 'evidence' | 'reports' | 'settings'>('dashboard');
+  const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>(() => appConfig.academicYear || DEFAULT_APP_CONFIG.academicYear);
+  const hasManuallySelectedYearRef = useRef<boolean>(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState<boolean>(false);
   const [isResetLogoModalOpen, setIsResetLogoModalOpen] = useState<boolean>(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState<boolean>(false);
@@ -288,6 +334,7 @@ const App: React.FC = () => {
   const logActivity = (act: Omit<UserActivityLog, 'id' | 'timestamp'>) => {
     const newLog: UserActivityLog = {
       ...act,
+      userAvatar: act.userAvatar || (currentUser ? getUserAvatar(currentUser) : undefined),
       id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString()
     };
@@ -356,7 +403,39 @@ const App: React.FC = () => {
         // Real-time Settings Listener (Identitas sekolah & setting sama di semua akun)
         unsubscribeSettings = subscribeToSettings((remoteConfig) => {
           if (remoteConfig && remoteConfig.schoolName) {
-            const mergedConfig: AppConfig = { ...DEFAULT_APP_CONFIG, ...remoteConfig };
+            const normalizedYear = normalizeAcademicYearFormat(remoteConfig.academicYear || DEFAULT_APP_CONFIG.academicYear);
+            const baseRemoteYears =
+              Array.isArray(remoteConfig.academicYears) && remoteConfig.academicYears.length > 0
+                ? remoteConfig.academicYears
+                : DEFAULT_ACADEMIC_YEARS;
+            const mergedYears = sortAcademicYears([
+              ...baseRemoteYears,
+              normalizedYear,
+            ]);
+            const mergedPrintSettings: PrintDocumentSettings = {
+              ...DEFAULT_PRINT_SETTINGS,
+              ...(remoteConfig.printSettings || {}),
+              kopStyle: {
+                fontFamily: remoteConfig.printSettings?.kopStyle?.fontFamily || DEFAULT_KOP_STYLE.fontFamily,
+                line1: { ...DEFAULT_KOP_STYLE.line1, ...(remoteConfig.printSettings?.kopStyle?.line1 || {}) },
+                line2: { ...DEFAULT_KOP_STYLE.line2, ...(remoteConfig.printSettings?.kopStyle?.line2 || {}) },
+                line3: { ...DEFAULT_KOP_STYLE.line3, ...(remoteConfig.printSettings?.kopStyle?.line3 || {}) },
+                line4: { ...DEFAULT_KOP_STYLE.line4, ...(remoteConfig.printSettings?.kopStyle?.line4 || {}) },
+                line5: { ...DEFAULT_KOP_STYLE.line5, ...(remoteConfig.printSettings?.kopStyle?.line5 || {}) },
+                line6: { ...DEFAULT_KOP_STYLE.line6, ...(remoteConfig.printSettings?.kopStyle?.line6 || {}) },
+              },
+              signatureStyle: {
+                ...DEFAULT_SIGNATURE_STYLE,
+                ...(remoteConfig.printSettings?.signatureStyle || {}),
+              },
+            };
+            const mergedConfig: AppConfig = {
+              ...DEFAULT_APP_CONFIG,
+              ...remoteConfig,
+              academicYear: normalizedYear,
+              academicYears: mergedYears,
+              printSettings: mergedPrintSettings,
+            };
             if (isSavingLogoRef.current) {
               // Avoid overwriting a logo upload that is currently being saved to Firestore
               setAppConfig(prev => ({ ...mergedConfig, logoUrl: prev.logoUrl }));
@@ -365,9 +444,12 @@ const App: React.FC = () => {
             setAppConfig(mergedConfig);
             setTempConfig(prev =>
               isEditingConfigRef.current
-                ? { ...prev, logoUrl: mergedConfig.logoUrl, theme: mergedConfig.theme }
+                ? { ...prev, logoUrl: mergedConfig.logoUrl, theme: mergedConfig.theme, academicYears: mergedYears }
                 : mergedConfig
             );
+            if (!hasManuallySelectedYearRef.current) {
+              setSelectedAcademicYear(normalizedYear);
+            }
             if (mergedConfig.theme) {
               setThemeName(mergedConfig.theme);
             }
@@ -451,7 +533,7 @@ const App: React.FC = () => {
       userId: user.id,
       userName: user.name,
       userRole: user.role,
-      userAvatar: user.avatar,
+      userAvatar: getUserAvatar(user),
       action: 'LOGIN',
       title: 'Autentikasi Login Berhasil',
       details: `Pengguna masuk ke sistem SiPerSis dengan akun username "${user.username}"`,
@@ -489,13 +571,60 @@ const App: React.FC = () => {
     }
   };
 
+  const availableAcademicYears = useMemo(() => {
+    const baseYears =
+      appConfig.academicYears && appConfig.academicYears.length > 0
+        ? appConfig.academicYears
+        : DEFAULT_ACADEMIC_YEARS;
+    const fromStudents = students.map(s => getRecordAcademicYear(s.academicYear));
+    const fromViolations = violations.map(v => getRecordAcademicYear(v.academicYear));
+    return sortAcademicYears([
+      ...baseYears,
+      appConfig.academicYear,
+      ...fromStudents,
+      ...fromViolations,
+    ]);
+  }, [appConfig.academicYears, appConfig.academicYear, students, violations]);
+
+  const effectiveInputAcademicYear =
+    selectedAcademicYear === 'ALL' ? appConfig.academicYear : selectedAcademicYear;
+
+  const scopedStudents = useMemo(
+    () => students.filter(s => matchesAcademicYear(s.academicYear, selectedAcademicYear)),
+    [students, selectedAcademicYear]
+  );
+
+  const scopedViolations = useMemo(
+    () => violations.filter(v => matchesAcademicYear(v.academicYear, selectedAcademicYear)),
+    [violations, selectedAcademicYear]
+  );
+
+  const displayConfig: AppConfig = useMemo(
+    () => ({
+      ...appConfig,
+      academicYear:
+        selectedAcademicYear === 'ALL'
+          ? `Semua Tahun (${appConfig.academicYear})`
+          : selectedAcademicYear,
+    }),
+    [appConfig, selectedAcademicYear]
+  );
+
+  const handleSelectViewingYear = (year: string) => {
+    hasManuallySelectedYearRef.current = true;
+    setSelectedAcademicYear(year);
+    setSelectedStudent(null);
+  };
+
   const handleSeedSampleData = async () => {
-    setStudents(MOCK_STUDENTS);
-    setViolations(INITIAL_VIOLATIONS);
-    localStorage.setItem('siPersis_students', JSON.stringify(MOCK_STUDENTS));
-    localStorage.setItem('siPersis_violations', JSON.stringify(INITIAL_VIOLATIONS));
+    const taggedStudents = MOCK_STUDENTS.map(s => ({ ...s, academicYear: appConfig.academicYear }));
+    const taggedViolations = INITIAL_VIOLATIONS.map(v => ({ ...v, academicYear: appConfig.academicYear }));
+    setStudents(taggedStudents);
+    setViolations(taggedViolations);
+    localStorage.setItem('siPersis_students', JSON.stringify(taggedStudents));
+    localStorage.setItem('siPersis_violations', JSON.stringify(taggedViolations));
     try {
-      await resetCloudAllSampleData(DEFAULT_APP_CONFIG);
+      await resetCloudAllSampleData(appConfig);
       toast.success('Data sampel dan foto bukti berhasil dimuat ulang dan disinkronkan ke seluruh akun!');
     } catch (e) {
       toast.success('Data sampel berhasil dimuat ulang secara lokal!');
@@ -503,12 +632,16 @@ const App: React.FC = () => {
   };
 
   const addViolation = (record: ViolationRecord) => {
-    setViolations([record, ...violations]);
+    const taggedRecord: ViolationRecord = {
+      ...record,
+      academicYear: record.academicYear || effectiveInputAcademicYear,
+    };
+    setViolations([taggedRecord, ...violations]);
     
     // Update student points
-    const targetStudent = students.find(s => s.id === record.studentId);
+    const targetStudent = students.find(s => s.id === taggedRecord.studentId);
     const updatedStudent = targetStudent 
-      ? { ...targetStudent, totalPoints: targetStudent.totalPoints + record.points }
+      ? { ...targetStudent, totalPoints: targetStudent.totalPoints + taggedRecord.points }
       : null;
 
     if (updatedStudent) {
@@ -516,15 +649,15 @@ const App: React.FC = () => {
       saveCloudStudent(updatedStudent).catch(err => console.warn('Cloud save student points error:', err));
     }
 
-    saveCloudViolation(record).catch(err => console.warn('Cloud save violation error:', err));
-    toast.success(record.evidenceUrl ? 'Laporan berhasil ditambahkan beserta bukti foto!' : 'Laporan berhasil ditambahkan!');
+    saveCloudViolation(taggedRecord).catch(err => console.warn('Cloud save violation error:', err));
+    toast.success(taggedRecord.evidenceUrl ? 'Laporan berhasil ditambahkan beserta bukti foto!' : 'Laporan berhasil ditambahkan!');
 
     // Dispatch to external link / webhook if configured
     if (appConfig.webhookUrl) {
       if (isGoogleSpreadsheetUrl(appConfig.webhookUrl)) {
         toast.error('Data belum terkirim ke Google Sheets: Link di Pengaturan masih link tampilan spreadsheet langsung. Pasang skrip Web App (/exec) di menu Pengaturan agar data otomatis masuk ke baris tabel.', { duration: 8000 });
       } else if (appConfig.webhookEnabled !== false) {
-        sendViolationToExternalWebhook(appConfig.webhookUrl, record).then(res => {
+        sendViolationToExternalWebhook(appConfig.webhookUrl, taggedRecord).then(res => {
           if (res.success) {
             toast.info('Data berhasil disinkronkan ke tautan eksternal!');
           } else if (res.isDirectSpreadsheetUrl) {
@@ -628,9 +761,13 @@ const App: React.FC = () => {
 
   // Student CRUD Handlers
   const handleAddStudent = (student: Student) => {
-    setStudents([student, ...students]);
-    saveCloudStudent(student).catch(err => console.warn('Cloud save student error:', err));
-    toast.success('Data siswa berhasil ditambahkan dan disinkronkan!');
+    const taggedStudent: Student = {
+      ...student,
+      academicYear: student.academicYear || effectiveInputAcademicYear,
+    };
+    setStudents([taggedStudent, ...students]);
+    saveCloudStudent(taggedStudent).catch(err => console.warn('Cloud save student error:', err));
+    toast.success(`Data siswa berhasil ditambahkan ke TA ${taggedStudent.academicYear} dan disinkronkan!`);
 
     logActivity({
       userId: currentUser?.id || 'anon',
@@ -639,14 +776,18 @@ const App: React.FC = () => {
       userAvatar: currentUser?.avatar,
       action: 'ADD_STUDENT',
       title: 'Tambah Siswa Baru',
-      details: `Mendaftarkan siswa: ${student.name} (NIS: ${student.nis}, Kelas: ${student.class})`,
+      details: `Mendaftarkan siswa: ${taggedStudent.name} (NIS: ${taggedStudent.nis}, Kelas: ${taggedStudent.class}, TA: ${taggedStudent.academicYear})`,
       device: 'Browser Web'
     });
   };
 
   const handleUpdateStudent = (updatedStudent: Student) => {
-    setStudents(students.map(s => s.id === updatedStudent.id ? updatedStudent : s));
-    saveCloudStudent(updatedStudent).catch(err => console.warn('Cloud update student error:', err));
+    const taggedStudent: Student = {
+      ...updatedStudent,
+      academicYear: updatedStudent.academicYear || effectiveInputAcademicYear,
+    };
+    setStudents(students.map(s => s.id === taggedStudent.id ? taggedStudent : s));
+    saveCloudStudent(taggedStudent).catch(err => console.warn('Cloud update student error:', err));
     toast.success('Data siswa berhasil diperbarui!');
 
     logActivity({
@@ -656,7 +797,7 @@ const App: React.FC = () => {
       userAvatar: currentUser?.avatar,
       action: 'UPDATE_STUDENT',
       title: 'Pembaruan Data Siswa',
-      details: `Memperbarui biodata siswa: ${updatedStudent.name} (Kelas: ${updatedStudent.class})`,
+      details: `Memperbarui biodata siswa: ${taggedStudent.name} (Kelas: ${taggedStudent.class})`,
       device: 'Browser Web'
     });
   };
@@ -680,9 +821,13 @@ const App: React.FC = () => {
   };
 
   const handleBulkUploadStudents = (newStudents: Student[]) => {
-    setStudents([...newStudents, ...students]);
-    bulkSaveCloudStudents(newStudents).catch(err => console.warn('Cloud bulk save students error:', err));
-    toast.success(`${newStudents.length} data siswa berhasil diimpor & disinkronkan!`);
+    const taggedStudents = newStudents.map(s => ({
+      ...s,
+      academicYear: s.academicYear || effectiveInputAcademicYear,
+    }));
+    setStudents([...taggedStudents, ...students]);
+    bulkSaveCloudStudents(taggedStudents).catch(err => console.warn('Cloud bulk save students error:', err));
+    toast.success(`${taggedStudents.length} data siswa berhasil diimpor ke TA ${effectiveInputAcademicYear} & disinkronkan!`);
 
     logActivity({
       userId: currentUser?.id || 'anon',
@@ -691,18 +836,22 @@ const App: React.FC = () => {
       userAvatar: currentUser?.avatar,
       action: 'BULK_IMPORT',
       title: 'Impor Massal Siswa via Excel',
-      details: `Berhasil mengimpor ${newStudents.length} record data siswa baru`,
+      details: `Berhasil mengimpor ${taggedStudents.length} record data siswa baru untuk TA ${effectiveInputAcademicYear}`,
       device: 'Browser Web'
     });
   };
 
   const handleBulkUploadViolations = (newViolations: ViolationRecord[]) => {
-    setViolations([...newViolations, ...violations]);
+    const taggedViolations = newViolations.map(v => ({
+      ...v,
+      academicYear: v.academicYear || effectiveInputAcademicYear,
+    }));
+    setViolations([...taggedViolations, ...violations]);
     
     // Update student points for each violation
     const updatedStudents = [...students];
     const touchedStudents: Student[] = [];
-    newViolations.forEach(record => {
+    taggedViolations.forEach(record => {
       const studentIndex = updatedStudents.findIndex(s => s.id === record.studentId);
       if (studentIndex > -1) {
         updatedStudents[studentIndex] = {
@@ -714,12 +863,12 @@ const App: React.FC = () => {
     });
     setStudents(updatedStudents);
 
-    bulkSaveCloudViolations(newViolations).catch(err => console.warn('Cloud bulk save violations error:', err));
+    bulkSaveCloudViolations(taggedViolations).catch(err => console.warn('Cloud bulk save violations error:', err));
     if (touchedStudents.length > 0) {
       bulkSaveCloudStudents(touchedStudents).catch(err => console.warn('Cloud bulk update touched students error:', err));
     }
     
-    toast.success(`${newViolations.length} data laporan berhasil diimpor & disinkronkan!`);
+    toast.success(`${taggedViolations.length} data laporan berhasil diimpor ke TA ${effectiveInputAcademicYear} & disinkronkan!`);
 
     logActivity({
       userId: currentUser?.id || 'anon',
@@ -752,10 +901,12 @@ const App: React.FC = () => {
   };
 
   const handleDeleteStudentsByClass = (className: string) => {
-    const targetStudents = students.filter(s => s.class === className);
+    const targetStudents = students.filter(
+      s => s.class === className && matchesAcademicYear(s.academicYear, selectedAcademicYear)
+    );
     if (targetStudents.length === 0) return;
     const targetIds = targetStudents.map(s => s.id);
-    setStudents(prev => prev.filter(s => s.class !== className));
+    setStudents(prev => prev.filter(s => !targetIds.includes(s.id)));
     bulkDeleteCloudStudents(targetIds).catch(err => console.warn('Cloud delete students by class error:', err));
     toast.success(`${targetStudents.length} siswa kelas ${className} berhasil dihapus!`);
 
@@ -766,17 +917,38 @@ const App: React.FC = () => {
       userAvatar: currentUser?.avatar,
       action: 'DELETE_STUDENT',
       title: `Hapus Siswa Kelas ${className}`,
-      details: `Menghapus ${targetStudents.length} siswa rombel kelas ${className}`,
+      details: `Menghapus ${targetStudents.length} siswa rombel kelas ${className} (${selectedAcademicYear})`,
       device: 'Browser Web'
     });
   };
 
   const handleDeleteAllStudents = () => {
-    const count = students.length;
-    setStudents([]);
-    localStorage.setItem('siPersis_students', JSON.stringify([]));
-    clearAllCloudStudents().catch(err => console.warn('Cloud clear students error:', err));
-    toast.success(`Seluruh data siswa (${count} siswa) telah berhasil dihapus!`);
+    if (selectedAcademicYear === 'ALL') {
+      const count = students.length;
+      setStudents([]);
+      localStorage.setItem('siPersis_students', JSON.stringify([]));
+      clearAllCloudStudents().catch(err => console.warn('Cloud clear students error:', err));
+      toast.success(`Seluruh data siswa (${count} siswa) telah berhasil dihapus!`);
+
+      logActivity({
+        userId: currentUser?.id || 'anon',
+        userName: currentUser?.name || 'Admin',
+        userRole: currentUser?.role || UserRole.ADMIN,
+        userAvatar: currentUser?.avatar,
+        action: 'DELETE_STUDENT',
+        title: 'Hapus Semua Data Siswa',
+        details: `Mengosongkan seluruh direktori siswa (${count} siswa)`,
+        device: 'Browser Web'
+      });
+      return;
+    }
+
+    const targetIds = scopedStudents.map(s => s.id);
+    const count = targetIds.length;
+    if (count === 0) return;
+    setStudents(prev => prev.filter(s => !targetIds.includes(s.id)));
+    bulkDeleteCloudStudents(targetIds).catch(err => console.warn('Cloud clear year students error:', err));
+    toast.success(`${count} siswa pada Tahun Ajaran ${selectedAcademicYear} berhasil dihapus!`);
 
     logActivity({
       userId: currentUser?.id || 'anon',
@@ -784,8 +956,8 @@ const App: React.FC = () => {
       userRole: currentUser?.role || UserRole.ADMIN,
       userAvatar: currentUser?.avatar,
       action: 'DELETE_STUDENT',
-      title: 'Hapus Semua Data Siswa',
-      details: `Mengosongkan seluruh direktori siswa (${count} siswa)`,
+      title: `Hapus Siswa TA ${selectedAcademicYear}`,
+      details: `Mengosongkan direktori siswa Tahun Ajaran ${selectedAcademicYear} (${count} siswa)`,
       device: 'Browser Web'
     });
   };
@@ -854,8 +1026,30 @@ const App: React.FC = () => {
     });
   };
 
+  const handleBulkAddUsers = (newUsers: User[]) => {
+    if (newUsers.length === 0) return;
+    setUsers(prev => [...prev, ...newUsers]);
+    bulkSaveCloudUsers(newUsers).catch(err => console.warn('Cloud bulk save users error:', err));
+    toast.success(`${newUsers.length} pengguna baru berhasil diimpor dan disinkronkan!`);
+
+    logActivity({
+      userId: currentUser?.id || 'anon',
+      userName: currentUser?.name || 'Admin',
+      userRole: currentUser?.role || UserRole.ADMIN,
+      userAvatar: currentUser ? getUserAvatar(currentUser) : undefined,
+      action: 'USER_MANAGEMENT',
+      title: 'Impor Massal Pengguna via Excel',
+      details: `Berhasil mengimpor ${newUsers.length} akun pengguna/guru/TU/admin`,
+      device: 'Browser Web'
+    });
+  };
+
   const handleUpdateUser = (updatedUser: User) => {
     setUsers(users.map(u => u.id === updatedUser.id ? updatedUser : u));
+    if (currentUser && updatedUser.id === currentUser.id) {
+      setCurrentUser(updatedUser);
+      localStorage.setItem('currentUser', JSON.stringify(updatedUser));
+    }
     saveCloudUser(updatedUser).catch(err => console.warn('Cloud update user error:', err));
     toast.success('Data pengguna berhasil diperbarui!');
 
@@ -899,6 +1093,12 @@ const App: React.FC = () => {
     toast.success('Jenis pelanggaran/reward berhasil ditambahkan!');
   };
 
+  const handleBulkAddViolationTypes = (newTypes: ViolationType[]) => {
+    if (newTypes.length === 0) return;
+    setViolationTypes(prev => [...prev, ...newTypes]);
+    toast.success(`${newTypes.length} jenis pelanggaran/reward berhasil diimpor!`);
+  };
+
   const handleUpdateViolationType = (updatedType: ViolationType) => {
     setViolationTypes(violationTypes.map(t => t.id === updatedType.id ? updatedType : t));
     toast.success('Data jenis pelanggaran/reward berhasil diperbarui!');
@@ -919,12 +1119,161 @@ const App: React.FC = () => {
     toast.success(`Tema ${THEMES[tName].label} diterapkan dan disinkronkan ke seluruh akun!`);
   };
 
+  // Handle Academic Year Management Actions
+  const handleAddAcademicYear = async (newYear: string) => {
+    const normalized = normalizeAcademicYearFormat(newYear);
+    const updatedYears = sortAcademicYears([...availableAcademicYears, normalized]);
+    const updatedConfig: AppConfig = {
+      ...appConfig,
+      academicYears: updatedYears,
+      theme: themeName,
+    };
+    setAppConfig(updatedConfig);
+    setTempConfig(prev => ({ ...prev, academicYears: updatedYears }));
+    try {
+      await saveCloudSettings(updatedConfig);
+      toast.success(`Tahun ajaran ${normalized} berhasil ditambahkan & disinkronkan!`);
+    } catch (err) {
+      console.error('Failed to add academic year:', err);
+      toast.error('Tahun ajaran ditambahkan lokal, namun gagal sinkron ke Cloud Firestore.');
+    }
+
+    logActivity({
+      userId: currentUser?.id || 'anon',
+      userName: currentUser?.name || 'Admin',
+      userRole: currentUser?.role || UserRole.ADMIN,
+      userAvatar: currentUser?.avatar,
+      action: 'SETTINGS_UPDATE',
+      title: 'Tambah Tahun Ajaran Baru',
+      details: `Menambahkan tahun ajaran "${normalized}" ke dalam daftar sistem`,
+      device: 'Browser Web'
+    });
+  };
+
+  const handleSetActiveAcademicYear = async (year: string) => {
+    const normalized = normalizeAcademicYearFormat(year);
+    const updatedYears = sortAcademicYears([...availableAcademicYears, normalized]);
+    const updatedConfig: AppConfig = {
+      ...appConfig,
+      academicYear: normalized,
+      academicYears: updatedYears,
+      theme: themeName,
+    };
+    setAppConfig(updatedConfig);
+    setTempConfig(prev => ({ ...prev, academicYear: normalized, academicYears: updatedYears }));
+    hasManuallySelectedYearRef.current = true;
+    setSelectedAcademicYear(normalized);
+    try {
+      await saveCloudSettings(updatedConfig);
+      toast.success(`Tahun ajaran aktif diubah ke ${normalized} dan disinkronkan ke seluruh akun!`);
+    } catch (err) {
+      console.error('Failed to set active academic year:', err);
+      toast.error('Tahun ajaran aktif diperbarui lokal, namun gagal sinkron ke Cloud Firestore.');
+    }
+
+    logActivity({
+      userId: currentUser?.id || 'anon',
+      userName: currentUser?.name || 'Admin',
+      userRole: currentUser?.role || UserRole.ADMIN,
+      userAvatar: currentUser?.avatar,
+      action: 'SETTINGS_UPDATE',
+      title: 'Penggantian Tahun Ajaran Aktif',
+      details: `Mengubah tahun ajaran aktif utama sekolah menjadi ${normalized}`,
+      device: 'Browser Web'
+    });
+  };
+
+  const handleDeleteAcademicYear = async (year: string) => {
+    if (year === appConfig.academicYear) {
+      toast.error('Tidak dapat menghapus tahun ajaran yang sedang aktif.');
+      return;
+    }
+    const updatedYears = sortAcademicYears(
+      (appConfig.academicYears || availableAcademicYears).filter(y => y !== year)
+    );
+    const updatedConfig: AppConfig = {
+      ...appConfig,
+      academicYears: updatedYears,
+      theme: themeName,
+    };
+    setAppConfig(updatedConfig);
+    setTempConfig(prev => ({ ...prev, academicYears: updatedYears }));
+    if (selectedAcademicYear === year) {
+      setSelectedAcademicYear(appConfig.academicYear);
+    }
+    try {
+      await saveCloudSettings(updatedConfig);
+      toast.success(`Tahun ajaran ${year} dihapus dari daftar.`);
+    } catch (err) {
+      console.error('Failed to delete academic year:', err);
+      toast.error('Gagal menyinkronkan penghapusan tahun ajaran ke Cloud Firestore.');
+    }
+  };
+
+  const handlePromoteStudentsToYear = async (newStudents: Student[], targetYear: string) => {
+    setStudents(prev => [...newStudents, ...prev]);
+    try {
+      await bulkSaveCloudStudents(newStudents);
+    } catch (err) {
+      console.warn('Cloud promote students error:', err);
+    }
+    hasManuallySelectedYearRef.current = true;
+    setSelectedAcademicYear(targetYear);
+
+    logActivity({
+      userId: currentUser?.id || 'anon',
+      userName: currentUser?.name || 'Admin',
+      userRole: currentUser?.role || UserRole.ADMIN,
+      userAvatar: currentUser?.avatar,
+      action: 'BULK_IMPORT',
+      title: `Salin / Naik Kelas Siswa ke TA ${targetYear}`,
+      details: `Menyalin ${newStudents.length} siswa ke Tahun Ajaran ${targetYear}`,
+      device: 'Browser Web'
+    });
+  };
+
+  const handleSavePrintSettings = async (newPrintSettings: PrintDocumentSettings) => {
+    const updatedConfig: AppConfig = {
+      ...appConfig,
+      printSettings: newPrintSettings,
+      theme: themeName,
+    };
+    setAppConfig(updatedConfig);
+    setTempConfig((prev) => ({ ...prev, printSettings: newPrintSettings }));
+    try {
+      localStorage.setItem('appConfig', JSON.stringify(updatedConfig));
+    } catch {
+      // ignore storage quota warning
+    }
+    try {
+      await saveCloudSettings(updatedConfig);
+      toast.success('Pengaturan default Kop & TTD berhasil disimpan dan disinkronkan!');
+    } catch (err) {
+      console.error('Failed to save print settings to Cloud Firestore:', err);
+      toast.error('Pengaturan default tersimpan lokal, namun gagal sinkron ke Cloud Firestore.');
+    }
+  };
+
   // Handle General Settings Save & Synchronization
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
-    const configToSave = { ...tempConfig, theme: themeName };
+    const normalizedYear = normalizeAcademicYearFormat(tempConfig.academicYear);
+    const updatedYears = sortAcademicYears([
+      ...availableAcademicYears,
+      normalizedYear,
+    ]);
+    const configToSave: AppConfig = {
+      ...tempConfig,
+      academicYear: normalizedYear,
+      academicYears: updatedYears,
+      theme: themeName,
+    };
     isEditingConfigRef.current = false;
     setAppConfig(configToSave);
+    setTempConfig(configToSave);
+    if (!hasManuallySelectedYearRef.current) {
+      setSelectedAcademicYear(normalizedYear);
+    }
     try {
       localStorage.setItem('appConfig', JSON.stringify(configToSave));
     } catch {
@@ -1177,7 +1526,18 @@ const App: React.FC = () => {
         </div>
         
         <div className={`p-6 flex items-center gap-4 border-b border-${currentTheme.primary}-50 mx-2`}>
-          <img src={currentUser.avatar} alt="Profile" className={`w-12 h-12 rounded-full border-2 border-${currentTheme.primary}-100 shadow-sm`} />
+          <img
+            src={getUserAvatar(currentUser)}
+            alt={currentUser.name}
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              const fb = getDefaultUserAvatar(currentUser);
+              if (!e.currentTarget.src.endsWith(fb)) {
+                e.currentTarget.src = fb;
+              }
+            }}
+            className={`w-12 h-12 rounded-full object-cover border-2 border-${currentTheme.primary}-100 shadow-sm bg-white`}
+          />
           <div className="overflow-hidden">
              <p className="text-sm font-bold truncate text-slate-900">{currentUser.name}</p>
              <p className={`text-[10px] text-${currentTheme.primary}-500 font-bold uppercase bg-${currentTheme.primary}-50 inline-block px-2 py-0.5 rounded mt-1`}>{currentUser.role}</p>
@@ -1226,13 +1586,30 @@ const App: React.FC = () => {
             <div className="flex items-center gap-3">
               <Images className="w-5 h-5" /> Unduh Bukti Foto
             </div>
-            {violations.length > 0 && (
+            {scopedViolations.length > 0 && (
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-extrabold ${
                 activeTab === 'evidence' ? 'bg-white/25 text-white' : 'bg-blue-100 text-blue-700'
               }`}>
-                {violations.length}
+                {scopedViolations.length}
               </span>
             )}
+          </button>
+
+          <button 
+            onClick={() => { setActiveTab('reports'); setSidebarOpen(false); }}
+            className={`w-full flex items-center justify-between px-4 py-3.5 text-sm font-bold rounded-2xl transition-all duration-200 
+              ${activeTab === 'reports' 
+                ? `bg-gradient-to-r ${currentTheme.gradient} text-white shadow-md` 
+                : `text-slate-500 hover:bg-${currentTheme.primary}-50 hover:text-${currentTheme.primary}-600`}`}
+          >
+            <div className="flex items-center gap-3">
+              <Printer className="w-5 h-5" /> Cetak Laporan
+            </div>
+            <span className={`text-[9px] px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wide ${
+              activeTab === 'reports' ? 'bg-white/25 text-white' : 'bg-indigo-100 text-indigo-700'
+            }`}>
+              + Foto
+            </span>
           </button>
 
           {currentUser.role === UserRole.ADMIN && (
@@ -1246,6 +1623,25 @@ const App: React.FC = () => {
                <Settings className="w-5 h-5" /> Pengaturan
              </button>
           )}
+
+          {/* Mobile / Sidebar Academic Year Switcher */}
+          <div className="mt-6 pt-4 border-t border-slate-100 px-3 md:hidden">
+             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+               <Calendar className="w-3 h-3" /> Filter Tahun Ajaran
+             </label>
+             <select
+               value={selectedAcademicYear}
+               onChange={(e) => handleSelectViewingYear(e.target.value)}
+               className="w-full text-xs font-bold text-slate-800 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+             >
+               {availableAcademicYears.map(y => (
+                 <option key={y} value={y}>
+                   {y}{y === appConfig.academicYear ? ' (Aktif)' : ''}
+                 </option>
+               ))}
+               <option value="ALL">Semua Tahun Ajaran</option>
+             </select>
+          </div>
 
           {/* Theme Selector */}
           <div className="mt-8 pt-4 border-t border-slate-100">
@@ -1306,7 +1702,8 @@ const App: React.FC = () => {
                   activeTab === 'dashboard' ? 'Dashboard Overview' :
                   activeTab === 'input' ? 'Input Data Pelanggaran' :
                   activeTab === 'students' ? 'Direktori Siswa' : 
-                  activeTab === 'evidence' ? 'Galeri & Unduh Bukti Foto' : 'Pengaturan Sistem'
+                  activeTab === 'evidence' ? 'Galeri & Unduh Bukti Foto' :
+                  activeTab === 'reports' ? 'Pusat Cetak Laporan & Foto' : 'Pengaturan Sistem'
                }</h2>
                <p className="text-slate-500 text-sm mt-1 font-medium">Selamat datang, <span className={`text-${currentTheme.primary}-600`}>{currentUser.name}</span></p>
              </div>
@@ -1333,45 +1730,90 @@ const App: React.FC = () => {
                 </button>
 
                 <div>
-                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Tahun Ajaran</p>
-                   <div className="bg-white px-3.5 py-1 rounded-full shadow-sm border border-slate-100 mt-0.5">
-                      <p className="text-xs font-bold text-slate-700">{appConfig.academicYear}</p>
-                   </div>
+                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 flex items-center justify-end gap-1">
+                     <Calendar className="w-3 h-3" /> Tahun Ajaran Data
+                   </p>
+                   <select
+                     value={selectedAcademicYear}
+                     onChange={(e) => handleSelectViewingYear(e.target.value)}
+                     title="Pilih tahun ajaran untuk membedakan & memfilter data"
+                     className={`px-3.5 py-1.5 rounded-full shadow-sm border text-xs font-bold cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${
+                       selectedAcademicYear !== appConfig.academicYear
+                         ? 'bg-amber-50 border-amber-300 text-amber-800'
+                         : 'bg-white border-slate-200 text-slate-700 hover:border-indigo-300'
+                     }`}
+                   >
+                     {availableAcademicYears.map(y => (
+                       <option key={y} value={y}>
+                         TA {y}{y === appConfig.academicYear ? ' (Aktif)' : ''}
+                       </option>
+                     ))}
+                     <option value="ALL">Semua Tahun Ajaran</option>
+                   </select>
                 </div>
-             </div>
+              </div>
           </div>
+
+          {/* Non-default Academic Year Context Banner */}
+          {selectedAcademicYear !== appConfig.academicYear && (
+            <div className="print:hidden bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xs">
+              <div className="flex items-center gap-2 text-xs text-amber-900">
+                <Calendar className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  {selectedAcademicYear === 'ALL' ? (
+                    <>
+                      Menampilkan <strong>gabungan seluruh Tahun Ajaran</strong> ({scopedStudents.length} siswa, {scopedViolations.length} laporan). Input data baru otomatis masuk ke TA aktif <strong>{appConfig.academicYear}</strong>.
+                    </>
+                  ) : (
+                    <>
+                      Anda sedang melihat data khusus Tahun Ajaran <strong>{selectedAcademicYear}</strong> ({scopedStudents.length} siswa, {scopedViolations.length} laporan). Tahun aktif sekolah saat ini: <strong>{appConfig.academicYear}</strong>.
+                    </>
+                  )}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleSelectViewingYear(appConfig.academicYear)}
+                className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer"
+              >
+                Kembali ke TA Aktif ({appConfig.academicYear})
+              </button>
+            </div>
+          )}
 
           {activeTab === 'dashboard' && (
             <Dashboard 
-               violations={violations} 
-               students={students} 
+               violations={scopedViolations} 
+               students={scopedStudents} 
                onDelete={deleteViolation} 
                onViewStudent={handleViewStudent}
                theme={currentTheme}
-               appConfig={appConfig}
+               appConfig={displayConfig}
                currentUser={currentUser}
                onNavigateTab={setActiveTab}
                activities={activities}
                onClearActivities={handleClearActivities}
                users={users}
+               onSavePrintSettings={handleSavePrintSettings}
             />
           )}
 
           {activeTab === 'input' && (
             <ViolationForm 
               currentUser={currentUser} 
-              students={students} 
+              students={selectedAcademicYear === 'ALL' ? students.filter(s => matchesAcademicYear(s.academicYear, effectiveInputAcademicYear)) : scopedStudents} 
               violationTypes={violationTypes}
               onSubmit={addViolation} 
               onBulkUpload={handleBulkUploadViolations}
-              appConfig={appConfig}
+              appConfig={displayConfig}
+              activeAcademicYear={effectiveInputAcademicYear}
             />
           )}
 
           {activeTab === 'students' && (
             <StudentList 
-              students={students} 
-              violations={violations}
+              students={scopedStudents} 
+              violations={scopedViolations}
               onAddStudent={handleAddStudent} 
               onUpdateStudent={handleUpdateStudent}
               onDeleteStudent={handleDeleteStudent}
@@ -1380,21 +1822,39 @@ const App: React.FC = () => {
               onDeleteAllStudents={handleDeleteAllStudents}
               onDeleteStudentsByClass={handleDeleteStudentsByClass}
               onViewStudent={handleViewStudent}
-              appConfig={appConfig}
+              appConfig={displayConfig}
               currentUser={currentUser}
+              activeAcademicYear={effectiveInputAcademicYear}
+              users={users}
+              onSavePrintSettings={handleSavePrintSettings}
             />
           )}
 
           {activeTab === 'evidence' && (
             <EvidenceGallery 
-              violations={violations} 
-              students={students} 
-              appConfig={appConfig} 
+              violations={scopedViolations} 
+              students={scopedStudents} 
+              appConfig={displayConfig} 
               currentUser={currentUser} 
               onViewStudent={handleViewStudent}
               onSeedSampleData={handleSeedSampleData}
               onDeleteViolation={deleteViolation}
               onBulkDeleteViolations={handleBulkDeleteViolations}
+              users={users}
+              onSavePrintSettings={handleSavePrintSettings}
+            />
+          )}
+
+          {activeTab === 'reports' && (
+            <ReportCenter
+              students={scopedStudents}
+              violations={scopedViolations}
+              appConfig={displayConfig}
+              currentUser={currentUser}
+              users={users}
+              theme={currentTheme}
+              onViewStudent={handleViewStudent}
+              onSavePrintSettings={handleSavePrintSettings}
             />
           )}
 
@@ -1451,6 +1911,20 @@ const App: React.FC = () => {
                       </div>
                    </div>
                 </div>
+
+                {/* Academic Year Management Card */}
+                <AcademicYearManager
+                  activeAcademicYear={appConfig.academicYear}
+                  selectedAcademicYear={selectedAcademicYear}
+                  availableYears={availableAcademicYears}
+                  students={students}
+                  violations={violations}
+                  onSetActiveYear={handleSetActiveAcademicYear}
+                  onAddYear={handleAddAcademicYear}
+                  onDeleteYear={handleDeleteAcademicYear}
+                  onSelectViewYear={handleSelectViewingYear}
+                  onPromoteStudents={handlePromoteStudentsToYear}
+                />
 
                 {/* General Settings Section */}
                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -1631,6 +2105,156 @@ const App: React.FC = () => {
                               </div>
                             </div>
 
+                            {/* Tipografi & Gaya Per Baris Kop Surat + Default Cetak & TTD */}
+                            <div className="mt-5 space-y-4">
+                              {(() => {
+                                const resolvedPrint = resolvePrintSettings(tempConfig, currentUser, users);
+                                const updateTempPrint = (patch: Partial<PrintDocumentSettings>) => {
+                                  isEditingConfigRef.current = true;
+                                  setTempConfig((prev) => ({
+                                    ...prev,
+                                    printSettings: {
+                                      ...resolvePrintSettings(prev, currentUser, users),
+                                      ...patch,
+                                    },
+                                  }));
+                                };
+                                return (
+                                  <>
+                                    <div className="p-4 bg-indigo-50/50 border border-indigo-200 rounded-xl space-y-3">
+                                      <div>
+                                        <h6 className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider">
+                                          Ukuran Huruf, Jenis Font &amp; Format Per Baris Kop Surat
+                                        </h6>
+                                        <p className="text-[11px] text-indigo-800/80 mt-0.5">
+                                          Atur ukuran huruf (pt), Bold/Italic/Underline, perataan (Left/Center/Right/Justify) per baris kop serta jenis font resmi.
+                                        </p>
+                                      </div>
+                                      <KopStyleEditor
+                                        kopStyle={resolvedPrint.kopStyle}
+                                        onChange={(updatedKopStyle) =>
+                                          updateTempPrint({ kopStyle: updatedKopStyle })
+                                        }
+                                        compact={true}
+                                      />
+                                    </div>
+
+                                    <div className="p-4 bg-emerald-50/50 border border-emerald-200 rounded-xl space-y-3">
+                                      <div>
+                                        <h6 className="text-xs font-extrabold text-emerald-950 uppercase tracking-wider">
+                                          Pengaturan Default Tampil Kop, TTD &amp; Font Dokumen
+                                        </h6>
+                                        <p className="text-[11px] text-emerald-800/80 mt-0.5">
+                                          Anda tetap dapat mengubah opsi ini sebelum mencetak dari jendela Pratinjau Cetak.
+                                        </p>
+                                      </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                                        <label className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-emerald-200 text-xs font-bold text-slate-700 cursor-pointer">
+                                          <span>Tampilkan Kop Surat</span>
+                                          <input
+                                            type="checkbox"
+                                            checked={resolvedPrint.showKop}
+                                            onChange={(e) => updateTempPrint({ showKop: e.target.checked })}
+                                            className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                                          />
+                                        </label>
+                                        <label className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-emerald-200 text-xs font-bold text-slate-700 cursor-pointer">
+                                          <span>TTD Kepala Sekolah</span>
+                                          <input
+                                            type="checkbox"
+                                            checked={resolvedPrint.showKepsekSignature}
+                                            onChange={(e) => updateTempPrint({ showKepsekSignature: e.target.checked })}
+                                            className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                                          />
+                                        </label>
+                                        <label className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-emerald-200 text-xs font-bold text-slate-700 cursor-pointer">
+                                          <span>TTD Admin / Guru</span>
+                                          <input
+                                            type="checkbox"
+                                            checked={resolvedPrint.showStaffSignature}
+                                            onChange={(e) => updateTempPrint({ showStaffSignature: e.target.checked })}
+                                            className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                                          />
+                                        </label>
+                                      </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                                        <div>
+                                          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                                            Font Dokumen &amp; TTD
+                                          </label>
+                                          <select
+                                            value={resolvedPrint.documentFontFamily}
+                                            onChange={(e) =>
+                                              updateTempPrint({ documentFontFamily: e.target.value as PrintFontFamily })
+                                            }
+                                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
+                                          >
+                                            <option value="helvetica">Helvetica / Arial</option>
+                                            <option value="times">Times New Roman</option>
+                                            <option value="courier">Courier New</option>
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                                            Posisi TTD Kepsek
+                                          </label>
+                                          <select
+                                            value={resolvedPrint.kepsekPosition}
+                                            onChange={(e) =>
+                                              updateTempPrint({ kepsekPosition: e.target.value as SignatureBoxPosition })
+                                            }
+                                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
+                                          >
+                                            <option value="left">Kiri</option>
+                                            <option value="center">Tengah</option>
+                                            <option value="right">Kanan</option>
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                                            Posisi TTD Guru/Admin
+                                          </label>
+                                          <select
+                                            value={resolvedPrint.staffPosition}
+                                            onChange={(e) =>
+                                              updateTempPrint({ staffPosition: e.target.value as SignatureBoxPosition })
+                                            }
+                                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
+                                          >
+                                            <option value="left">Kiri</option>
+                                            <option value="center">Tengah</option>
+                                            <option value="right">Kanan</option>
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                                            Perataan Teks TTD
+                                          </label>
+                                          <select
+                                            value={resolvedPrint.signatureStyle.align}
+                                            onChange={(e) =>
+                                              updateTempPrint({
+                                                signatureStyle: {
+                                                  ...resolvedPrint.signatureStyle,
+                                                  align: e.target.value as PrintTextAlign,
+                                                },
+                                              })
+                                            }
+                                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
+                                          >
+                                            <option value="left">Rata Kiri (Left - Rapi)</option>
+                                            <option value="center">Tengah (Center)</option>
+                                            <option value="right">Rata Kanan (Right)</option>
+                                            <option value="justify">Rata Kiri-Kanan (Justify)</option>
+                                          </select>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </>
+                                );
+                              })()}
+                            </div>
+
                             {/* Live Kop Preview Card */}
                             <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
                               <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Pratinjau Kop Surat Resmi:</span>
@@ -1641,14 +2265,16 @@ const App: React.FC = () => {
                           </div>
 
                           <div>
-                            <label className="block text-sm font-bold text-slate-800 mb-1.5">Tahun Ajaran</label>
-                            <input 
-                              type="text" 
+                            <label className="block text-sm font-bold text-slate-800 mb-1.5">Tahun Ajaran Aktif</label>
+                            <select
                               value={tempConfig.academicYear}
                               onChange={e => setTempConfig({...tempConfig, academicYear: e.target.value})}
-                              className="w-full p-2.5 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white focus:ring-2 focus:ring-blue-500"
-                              placeholder="Contoh: 2026 / 2027"
-                            />
+                              className="w-full p-2.5 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white focus:ring-2 focus:ring-blue-500 font-semibold"
+                            >
+                              {sortAcademicYears([...availableAcademicYears, tempConfig.academicYear]).map(y => (
+                                <option key={y} value={y}>{y}</option>
+                              ))}
+                            </select>
                           </div>
                           <div>
                             <label className="block text-sm font-bold text-slate-800 mb-1.5">Website</label>
@@ -1830,16 +2456,24 @@ const App: React.FC = () => {
                     <UserManagement 
                         users={users} 
                         onAddUser={handleAddUser}
+                        onBulkAddUsers={handleBulkAddUsers}
                         onUpdateUser={handleUpdateUser}
                         onDeleteUser={handleDeleteUser}
                         onBulkDeleteUsers={handleBulkDeleteUsers}
                         currentUser={currentUser}
+                        appConfig={displayConfig}
+                        onSavePrintSettings={handleSavePrintSettings}
                     />
                     <ViolationTypeManagement 
                         types={violationTypes}
                         onAddType={handleAddViolationType}
+                        onBulkAddTypes={handleBulkAddViolationTypes}
                         onUpdateType={handleUpdateViolationType}
                         onDeleteType={handleDeleteViolationType}
+                        appConfig={displayConfig}
+                        currentUser={currentUser}
+                        users={users}
+                        onSavePrintSettings={handleSavePrintSettings}
                     />
                 </div>
 
@@ -1982,10 +2616,12 @@ const App: React.FC = () => {
       {selectedStudent && (
         <StudentDetailModal 
           student={selectedStudent} 
-          violations={violations}
+          violations={scopedViolations}
           onClose={() => setSelectedStudent(null)}
-          appConfig={appConfig}
+          appConfig={displayConfig}
           currentUser={currentUser}
+          users={users}
+          onSavePrintSettings={handleSavePrintSettings}
         />
       )}
       <Toaster richColors position="top-right" />

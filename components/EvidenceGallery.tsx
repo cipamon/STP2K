@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { toast } from 'sonner';
-import { ViolationRecord, Student, ViolationCategory, AppConfig, User } from '../types';
+import { ViolationRecord, Student, ViolationCategory, AppConfig, User, PrintDocumentSettings } from '../types';
 import { CLASS_LIST } from '../constants';
 import { 
   Images, 
@@ -24,24 +24,34 @@ import {
   LayoutGrid, 
   Table as TableIcon,
   RefreshCw,
-  Trash2
+  Trash2,
+  FileSpreadsheet,
+  FileDown,
+  Printer
 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import ConfirmModal from './ConfirmModal';
+import PrintPreviewModal from './PrintPreviewModal';
 import { 
   getEvidenceImageForViolation, 
   downloadImageFile, 
   downloadMultipleImagesAsZip 
 } from '../utils/evidenceImages';
+import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import { exportRowsToSpreadsheet } from '../utils/exportHelpers';
 
 interface EvidenceGalleryProps {
   violations: ViolationRecord[];
   students: Student[];
   appConfig: AppConfig;
   currentUser: User;
+  users?: User[];
   onViewStudent: (student: Student) => void;
   onSeedSampleData?: () => void;
   onDeleteViolation?: (id: string) => void;
   onBulkDeleteViolations?: (ids: string[]) => void;
+  onSavePrintSettings?: (settings: PrintDocumentSettings) => Promise<void> | void;
 }
 
 export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
@@ -49,10 +59,12 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
   students,
   appConfig,
   currentUser,
+  users = [],
   onViewStudent,
   onSeedSampleData,
   onDeleteViolation,
-  onBulkDeleteViolations
+  onBulkDeleteViolations,
+  onSavePrintSettings
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -65,6 +77,7 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
   const [zipProgress, setZipProgress] = useState<{ percent: number; text: string } | null>(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [recordToDelete, setRecordToDelete] = useState<ViolationRecord | null>(null);
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
 
   // Only include records that have actual evidence photo attached
   const recordsWithEvidence = useMemo(() => {
@@ -179,6 +192,105 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
     handleDownloadZip(filteredRecords, `semua_bukti_foto_${Date.now()}.zip`);
   };
 
+  const handleDownloadXls = () => {
+    if (filteredRecords.length === 0) {
+      toast.error('Tidak ada data laporan bukti foto untuk diunduh.');
+      return;
+    }
+    const rows = filteredRecords.map((r, idx) => ({
+      No: idx + 1,
+      Tanggal: r.date ? new Date(r.date).toLocaleDateString('id-ID') : '-',
+      'Nama Siswa': r.studentName,
+      Kelas: r.studentClass,
+      Kategori: r.category,
+      Deskripsi: r.description,
+      Poin: r.points,
+      Pelapor: r.reporterName || 'Petugas',
+      'Tahun Ajaran': r.academicYear || appConfig.academicYear,
+    }));
+    exportRowsToSpreadsheet(
+      rows,
+      'Bukti Foto Laporan',
+      `Daftar_Bukti_Foto_${new Date().toISOString().slice(0, 10)}`,
+      [6, 14, 26, 12, 14, 42, 8, 20, 14],
+      'xls'
+    );
+    toast.success(`Berhasil mengunduh ${rows.length} data bukti foto (.xls)!`);
+  };
+
+  const buildEvidencePdfDoc = async (customSettings?: PrintDocumentSettings) => {
+    const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
+    const font = settings.documentFontFamily || 'helvetica';
+    const doc = new jsPDF({ orientation: 'landscape' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const currentY = await drawPdfKopSurat(doc, appConfig, 8, settings);
+
+    doc.setFontSize(12);
+    doc.setFont(font, 'bold');
+    doc.text('REKAPITULASI DOKUMENTASI BUKTI FOTO SISWA', pageWidth / 2, currentY + 6, { align: 'center' });
+
+    doc.setFontSize(9);
+    doc.setFont(font, 'normal');
+    doc.text(`Tahun Ajaran: ${appConfig.academicYear} • Total ${filteredRecords.length} Dokumentasi`, pageWidth / 2, currentY + 11, { align: 'center' });
+
+    autoTable(doc, {
+      startY: currentY + 17,
+      head: [['No', 'Tanggal', 'Nama Siswa', 'Kelas', 'Kategori', 'Deskripsi Kejadian', 'Poin', 'Pelapor']],
+      body: filteredRecords.map((r, idx) => [
+        idx + 1,
+        r.date ? new Date(r.date).toLocaleDateString('id-ID') : '-',
+        r.studentName,
+        r.studentClass,
+        r.category,
+        r.description,
+        r.points > 0 ? `+${r.points}` : r.points,
+        r.reporterName || 'Petugas',
+      ]),
+      theme: 'grid',
+      styles: { fontSize: 8, cellPadding: 2.5, valign: 'middle', font },
+      headStyles: { fillColor: [79, 70, 229], textColor: 255, halign: 'center', font },
+      columnStyles: {
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 24, halign: 'center' },
+        2: { cellWidth: 42, fontStyle: 'bold' },
+        3: { cellWidth: 18, halign: 'center' },
+        4: { cellWidth: 22, halign: 'center' },
+        5: { cellWidth: 'auto' },
+        6: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
+        7: { cellWidth: 32 },
+      },
+    });
+
+    const finalY = ((doc as any).lastAutoTable?.finalY || currentY + 30) + 12;
+    drawPdfSignatures(doc, settings, appConfig, finalY);
+
+    return doc;
+  };
+
+  const handleDirectDownloadPdf = async () => {
+    if (filteredRecords.length === 0) {
+      toast.error('Tidak ada data bukti foto untuk diunduh.');
+      return;
+    }
+    try {
+      const settings = resolvePrintSettings(appConfig, currentUser, users);
+      const doc = await buildEvidencePdfDoc(settings);
+      doc.save(`Daftar_Bukti_Foto_${new Date().toISOString().slice(0, 10)}.pdf`);
+      toast.success('File PDF daftar bukti foto berhasil diunduh!');
+    } catch (err) {
+      console.error(err);
+      toast.error('Gagal mengunduh PDF bukti foto.');
+    }
+  };
+
+  const handlePrintPdf = () => {
+    if (filteredRecords.length === 0) {
+      toast.error('Tidak ada data bukti foto untuk dicetak.');
+      return;
+    }
+    setIsPrintModalOpen(true);
+  };
+
   const handleExecuteBulkDelete = () => {
     if (selectedIds.length === 0) return;
     if (onBulkDeleteViolations) {
@@ -233,6 +345,10 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
 
           {/* Quick Summary Chips */}
           <div className="flex flex-wrap items-center gap-2 mt-4">
+            <span className="px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-extrabold flex items-center gap-1.5">
+              <Calendar className="w-3 h-3 text-indigo-600" />
+              TA {appConfig.academicYear}
+            </span>
             <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5">
               <Images className="w-3 h-3 text-slate-500" />
               Total {totalCount} Foto Bukti
@@ -253,11 +369,41 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
         </div>
 
         {/* Global Export Buttons */}
-        <div className="relative z-10 flex flex-col sm:flex-row md:flex-col lg:flex-row gap-3 shrink-0">
+        <div className="relative z-10 flex flex-wrap gap-2.5 shrink-0">
+          <button
+            onClick={handleDownloadXls}
+            disabled={filteredRecords.length === 0}
+            className="px-4 py-3 bg-white hover:bg-teal-50 text-teal-700 border border-teal-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+            title="Unduh daftar laporan bukti foto ke format Excel (.xls)"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Unduh XLS
+          </button>
+
+          <button
+            onClick={handleDirectDownloadPdf}
+            disabled={filteredRecords.length === 0}
+            className="px-4 py-3 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+            title="Unduh langsung daftar laporan bukti foto ke PDF"
+          >
+            <FileDown className="w-4 h-4" />
+            Unduh PDF
+          </button>
+
+          <button
+            onClick={handlePrintPdf}
+            disabled={filteredRecords.length === 0}
+            className="px-4 py-3 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+            title="Pratinjau & Cetak PDF"
+          >
+            <Printer className="w-4 h-4" />
+            Cetak PDF
+          </button>
+
           <button
             onClick={handleDownloadAllFilteredZip}
             disabled={isZipping || filteredRecords.length === 0}
-            className="px-5 py-3.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-2xl font-bold text-xs shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            className="px-5 py-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-2xl font-bold text-xs shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             title="Unduh semua foto yang tampil dalam file ZIP"
           >
             <FileArchive className="w-4 h-4" />
@@ -267,7 +413,7 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
           {onSeedSampleData && totalCount < 3 && (
             <button
               onClick={onSeedSampleData}
-              className="px-4 py-3 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-2"
+              className="px-4 py-3 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer"
               title="Tambahkan contoh laporan berbukti foto lengkap"
             >
               <RefreshCw className="w-4 h-4 text-amber-600" />
@@ -868,6 +1014,19 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
         }
         confirmText="Ya, Hapus Data"
         variant="danger"
+      />
+
+      {/* Unified Print Settings & Preview Modal */}
+      <PrintPreviewModal
+        isOpen={isPrintModalOpen}
+        title="Pratinjau & Pengaturan Cetak Dokumentasi Bukti Foto"
+        fileNamePrefix="Daftar_Bukti_Foto"
+        appConfig={appConfig}
+        currentUser={currentUser}
+        users={users}
+        onClose={() => setIsPrintModalOpen(false)}
+        buildPdfDoc={buildEvidencePdfDoc}
+        onSaveDefaultSettings={onSavePrintSettings}
       />
     </div>
   );

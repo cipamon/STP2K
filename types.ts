@@ -10,27 +10,41 @@ export enum ViolationCategory {
   PRESTASI = 'Prestasi', // Reward
 }
 
+export type UserPosition = 'GURU' | 'TU' | 'ADMIN';
+
 export interface User {
   id: string;
   name: string;
   username: string;
   password: string;
   role: UserRole;
+  position?: UserPosition;
+  gender?: 'L' | 'P';
   nip?: string;
   avatar?: string;
 }
 
+export type StudentStatus = 'Aktif' | 'Lulus' | 'Pindah' | 'Non-Aktif';
+
 export interface Student {
   id: string;
   nis: string;
-  nisn: string; // Added NISN
+  nisn: string;
   name: string;
   class: string;
-  gender: 'L' | 'P'; // Added Gender: L = Laki-laki, P = Perempuan
-  totalPoints: number;
+  absenNumber?: string;
+  birthPlace?: string;
+  birthDate?: string;
+  email?: string;
+  gender: 'L' | 'P';
+  address?: string;
+  phone?: string;
+  parentPhone?: string;
   photoUrl?: string;
   avatar?: string;
-  parentPhone?: string;
+  status?: StudentStatus | string;
+  totalPoints: number;
+  academicYear?: string;
 }
 
 export interface ViolationType {
@@ -51,6 +65,7 @@ export interface ViolationRecord {
   points: number;
   reporterName: string;
   evidenceUrl?: string; // Placeholder for image data/url
+  academicYear?: string;
 }
 
 export interface AIAnalysisResult {
@@ -71,6 +86,60 @@ export interface AppTheme {
   sidebar: string; // Sidebar border/active color
 }
 
+export type PrintFontFamily = 'helvetica' | 'times' | 'courier';
+export type PrintTextAlign = 'left' | 'center' | 'right' | 'justify';
+export type SignatureBoxPosition = 'left' | 'center' | 'right';
+
+export interface TextFormatStyle {
+  fontSize?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  align?: PrintTextAlign;
+}
+
+export interface KopSuratStyleConfig {
+  fontFamily: PrintFontFamily;
+  line1: TextFormatStyle;
+  line2: TextFormatStyle;
+  line3: TextFormatStyle;
+  line4: TextFormatStyle;
+  line5: TextFormatStyle;
+  line6: TextFormatStyle;
+}
+
+export interface SignatureStyleConfig {
+  fontSize: number;
+  align: PrintTextAlign;
+  boldHeader: boolean;
+  italicHeader: boolean;
+  underlineHeader: boolean;
+  boldName: boolean;
+  italicName: boolean;
+  underlineName: boolean;
+  boldNip: boolean;
+  italicNip: boolean;
+  underlineNip: boolean;
+  spacingHeight: number;
+}
+
+export interface PrintDocumentSettings {
+  showKop: boolean;
+  showKepsekSignature: boolean;
+  showStaffSignature: boolean;
+  kepsekPosition: SignatureBoxPosition;
+  staffPosition: SignatureBoxPosition;
+  kepsekTitle: string;
+  staffUserId: string;
+  staffRoleTitle: string;
+  staffName: string;
+  staffNip: string;
+  cityLabel: string;
+  documentFontFamily: PrintFontFamily;
+  kopStyle: KopSuratStyleConfig;
+  signatureStyle: SignatureStyleConfig;
+}
+
 export interface AppConfig {
   schoolName: string;
   appName: string;
@@ -79,6 +148,7 @@ export interface AppConfig {
   website: string;
   email: string;
   academicYear: string;
+  academicYears?: string[];
   principalName: string;
   principalNip: string;
   theme?: ThemeName;
@@ -90,6 +160,7 @@ export interface AppConfig {
   phone?: string;
   fax?: string;
   provinsiLogoUrl?: string;
+  printSettings?: PrintDocumentSettings;
 }
 
 export type ActivityType = 

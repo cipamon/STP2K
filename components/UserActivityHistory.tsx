@@ -1,9 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { UserActivityLog, UserRole, AppTheme, User } from '../types';
+import { UserActivityLog, UserRole, AppTheme, User, AppConfig, PrintDocumentSettings } from '../types';
+import { DEFAULT_APP_CONFIG } from '../constants';
 import { 
   Activity, 
   Search, 
-  Filter, 
   Download, 
   Trash2, 
   LogIn, 
@@ -12,18 +12,20 @@ import {
   Users, 
   Settings, 
   Upload, 
-  CheckCircle2, 
   Calendar, 
   Clock, 
   UserCheck, 
   ShieldAlert, 
   Printer, 
-  Eye,
-  RefreshCw,
-  SlidersHorizontal,
-  ChevronRight
+  FileSpreadsheet,
+  FileDown
 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { getActionLabel, formatRelativeTime, exportActivitiesToExcel } from '../utils/activityLogger';
+import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import PrintPreviewModal from './PrintPreviewModal';
+import { getDefaultUserAvatar, getUserAvatar } from '../utils/avatarHelpers';
 import { toast } from 'sonner';
 
 interface UserActivityHistoryProps {
@@ -32,6 +34,8 @@ interface UserActivityHistoryProps {
   theme: AppTheme;
   currentUser: User;
   users?: User[];
+  appConfig?: AppConfig;
+  onSavePrintSettings?: (settings: PrintDocumentSettings) => Promise<void> | void;
 }
 
 export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
@@ -39,8 +43,12 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
   onClearActivities,
   theme,
   currentUser,
-  users = []
+  users = [],
+  appConfig,
+  onSavePrintSettings
 }) => {
+  const effectiveAppConfig = appConfig || DEFAULT_APP_CONFIG;
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedActionCategory, setSelectedActionCategory] = useState<string>('ALL');
   const [selectedUserFilter, setSelectedUserFilter] = useState<string>('ALL');
@@ -123,12 +131,79 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
       toast.error('Tidak ada data riwayat untuk diekspor.');
       return;
     }
-    exportActivitiesToExcel(filteredActivities);
-    toast.success('Log aktivitas berhasil diekspor ke Excel!');
+    exportActivitiesToExcel(filteredActivities, undefined, 'xls');
+    toast.success('Log aktivitas berhasil diunduh (.xls)!');
+  };
+
+  const buildActivityPdfDoc = async (customSettings?: PrintDocumentSettings) => {
+    const settings = customSettings || resolvePrintSettings(effectiveAppConfig, currentUser, users);
+    const font = settings.documentFontFamily || 'helvetica';
+    const doc = new jsPDF({ orientation: 'landscape' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const currentY = await drawPdfKopSurat(doc, effectiveAppConfig, 8, settings);
+    const startY = currentY + 6;
+
+    doc.setFontSize(12);
+    doc.setFont(font, 'bold');
+    doc.text('RIWAYAT AKTIVITAS PENGGUNA (AUDIT TRAIL)', pageWidth / 2, startY, { align: 'center' });
+    doc.setFontSize(9);
+    doc.setFont(font, 'normal');
+    doc.text(`Total Log: ${filteredActivities.length} Kejadian`, pageWidth / 2, startY + 5, { align: 'center' });
+
+    autoTable(doc, {
+      startY: startY + 11,
+      head: [['No', 'Waktu', 'Pengguna', 'Role', 'Aksi', 'Judul & Keterangan', 'Perangkat']],
+      body: filteredActivities.map((act, idx) => [
+        idx + 1,
+        new Date(act.timestamp).toLocaleString('id-ID'),
+        act.userName,
+        act.userRole,
+        getActionLabel(act.action).label,
+        `${act.title}\n${act.details}`,
+        act.device || 'Web Browser',
+      ]),
+      theme: 'grid',
+      styles: { fontSize: 7.5, cellPadding: 2.5, valign: 'middle', font },
+      headStyles: { fillColor: [126, 34, 206], textColor: 255, halign: 'center', font },
+      columnStyles: {
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 34 },
+        2: { cellWidth: 38, fontStyle: 'bold' },
+        3: { cellWidth: 16, halign: 'center' },
+        4: { cellWidth: 28, halign: 'center' },
+        5: { cellWidth: 'auto' },
+        6: { cellWidth: 26 },
+      },
+    });
+
+    const finalY = ((doc as any).lastAutoTable?.finalY || startY + 25) + 12;
+    drawPdfSignatures(doc, settings, effectiveAppConfig, finalY);
+
+    return doc;
+  };
+
+  const handleDirectDownloadPdf = async () => {
+    if (filteredActivities.length === 0) {
+      toast.error('Tidak ada data riwayat untuk diunduh.');
+      return;
+    }
+    try {
+      const settings = resolvePrintSettings(effectiveAppConfig, currentUser, users);
+      const doc = await buildActivityPdfDoc(settings);
+      doc.save(`Log_Aktivitas_SiPerSis_${new Date().toISOString().slice(0, 10)}.pdf`);
+      toast.success('File PDF log aktivitas berhasil diunduh!');
+    } catch (err) {
+      console.error(err);
+      toast.error('Gagal mengunduh PDF log aktivitas.');
+    }
   };
 
   const handlePrint = () => {
-    window.print();
+    if (filteredActivities.length === 0) {
+      toast.error('Tidak ada data riwayat untuk dicetak.');
+      return;
+    }
+    setIsPrintModalOpen(true);
   };
 
   const renderActionIcon = (action: string) => {
@@ -179,18 +254,24 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap w-full lg:w-auto">
+        <div className="flex items-center gap-2 flex-wrap w-full lg:w-auto">
           <button
             onClick={handleExportExcel}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-sm shadow-emerald-200"
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-sm shadow-emerald-200 cursor-pointer"
           >
-            <Download className="w-4 h-4" /> Unduh Excel
+            <FileSpreadsheet className="w-4 h-4" /> Unduh XLS
+          </button>
+          <button
+            onClick={handleDirectDownloadPdf}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
+          >
+            <FileDown className="w-4 h-4" /> Unduh PDF
           </button>
           <button
             onClick={handlePrint}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition shadow-sm"
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
           >
-            <Printer className="w-4 h-4" /> Cetak Log
+            <Printer className="w-4 h-4" /> Cetak PDF
           </button>
           {onClearActivities && (
             <button
@@ -370,18 +451,25 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
                     <div className="bg-slate-50/70 hover:bg-slate-50 border border-slate-200/80 rounded-2xl p-4 transition-all duration-150">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
                         <div className="flex items-center gap-2.5 flex-wrap">
-                          {act.userAvatar ? (
-                            <img
-                              src={act.userAvatar}
-                              alt={act.userName}
-                              className="w-7 h-7 rounded-full object-cover border border-slate-200"
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <div className="w-7 h-7 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-xs font-bold">
-                              {act.userName.charAt(0)}
-                            </div>
-                          )}
+                          {(() => {
+                            const matchedUser = users.find(u => u.id === act.userId);
+                            const fallbackUser = matchedUser || { role: act.userRole, name: act.userName, username: '' };
+                            const avatarSrc = getUserAvatar({ ...fallbackUser, avatar: act.userAvatar || matchedUser?.avatar });
+                            return (
+                              <img
+                                src={avatarSrc}
+                                alt={act.userName}
+                                onError={(e) => {
+                                  const fb = getDefaultUserAvatar(fallbackUser);
+                                  if (!e.currentTarget.src.endsWith(fb)) {
+                                    e.currentTarget.src = fb;
+                                  }
+                                }}
+                                className="w-7 h-7 rounded-full object-cover border border-slate-200"
+                                referrerPolicy="no-referrer"
+                              />
+                            );
+                          })()}
                           <span className="text-sm font-bold text-slate-800">{act.userName}</span>
                           <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
                             act.userRole === UserRole.ADMIN 
@@ -453,13 +541,25 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-2">
-                          {act.userAvatar ? (
-                            <img src={act.userAvatar} alt={act.userName} className="w-6 h-6 rounded-full object-cover border" referrerPolicy="no-referrer" />
-                          ) : (
-                            <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center font-bold text-[10px]">
-                              {act.userName.charAt(0)}
-                            </div>
-                          )}
+                          {(() => {
+                            const matchedUser = users.find(u => u.id === act.userId);
+                            const fallbackUser = matchedUser || { role: act.userRole, name: act.userName, username: '' };
+                            const avatarSrc = getUserAvatar({ ...fallbackUser, avatar: act.userAvatar || matchedUser?.avatar });
+                            return (
+                              <img
+                                src={avatarSrc}
+                                alt={act.userName}
+                                onError={(e) => {
+                                  const fb = getDefaultUserAvatar(fallbackUser);
+                                  if (!e.currentTarget.src.endsWith(fb)) {
+                                    e.currentTarget.src = fb;
+                                  }
+                                }}
+                                className="w-6 h-6 rounded-full object-cover border border-slate-200"
+                                referrerPolicy="no-referrer"
+                              />
+                            );
+                          })()}
                           <div>
                             <p className="font-bold text-slate-800 leading-tight">{act.userName}</p>
                             <span className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase ${
@@ -498,6 +598,19 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
           </div>
         </div>
       )}
+
+      {/* Unified Print Settings & Preview Modal */}
+      <PrintPreviewModal
+        isOpen={isPrintModalOpen}
+        title="Pratinjau & Pengaturan Cetak Log Aktivitas Pengguna"
+        fileNamePrefix="Log_Aktivitas_SiPerSis"
+        appConfig={effectiveAppConfig}
+        currentUser={currentUser}
+        users={users}
+        onClose={() => setIsPrintModalOpen(false)}
+        buildPdfDoc={buildActivityPdfDoc}
+        onSaveDefaultSettings={onSavePrintSettings}
+      />
     </div>
   );
 };

@@ -10,10 +10,19 @@
         "nisn": { "type": "string" },
         "name": { "type": "string" },
         "class": { "type": "string" },
+        "absenNumber": { "type": "string" },
+        "birthPlace": { "type": "string" },
+        "birthDate": { "type": "string" },
+        "email": { "type": "string" },
         "gender": { "type": "string" },
-        "totalPoints": { "type": "number" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
         "parentPhone": { "type": "string" },
-        "avatar": { "type": "string" }
+        "photoUrl": { "type": "string" },
+        "avatar": { "type": "string" },
+        "status": { "type": "string" },
+        "totalPoints": { "type": "number" },
+        "academicYear": { "type": "string" }
       },
       "required": ["id", "nis", "name", "class", "totalPoints"]
     },
@@ -31,7 +40,8 @@
         "category": { "type": "string" },
         "points": { "type": "number" },
         "reporterName": { "type": "string" },
-        "evidenceUrl": { "type": "string" }
+        "evidenceUrl": { "type": "string" },
+        "academicYear": { "type": "string" }
       },
       "required": ["id", "studentId", "studentName", "studentClass", "date", "description", "category", "points", "reporterName"]
     },
@@ -45,6 +55,8 @@
         "username": { "type": "string" },
         "password": { "type": "string" },
         "role": { "type": "string" },
+        "position": { "type": "string" },
+        "gender": { "type": "string" },
         "nip": { "type": "string" },
         "avatar": { "type": "string" }
       },
@@ -74,13 +86,25 @@
       "type": "object",
       "properties": {
         "schoolName": { "type": "string" },
-        "schoolAddress": { "type": "string" },
-        "headmasterName": { "type": "string" },
-        "headmasterNip": { "type": "string" },
+        "appName": { "type": "string" },
+        "address": { "type": "string" },
+        "website": { "type": "string" },
+        "email": { "type": "string" },
+        "principalName": { "type": "string" },
+        "principalNip": { "type": "string" },
         "academicYear": { "type": "string" },
+        "academicYears": { "type": "array", "description": "List of configured academic years" },
         "theme": { "type": "string" },
         "logoUrl": { "type": "string" },
-        "contactPhone": { "type": "string" }
+        "governmentHeader": { "type": "string" },
+        "departmentHeader": { "type": "string" },
+        "postalCode": { "type": "string" },
+        "phone": { "type": "string" },
+        "fax": { "type": "string" },
+        "provinsiLogoUrl": { "type": "string" },
+        "webhookUrl": { "type": "string" },
+        "webhookEnabled": { "type": "boolean" },
+        "printSettings": { "type": "object", "description": "Default print, Kop Surat typography, and signature layout settings" }
       },
       "required": ["schoolName", "academicYear", "theme"]
     }

@@ -77,7 +77,7 @@ export async function seedInitialCloudDataIfNeeded(defaultConfig: AppConfig) {
     if (studentsSnap.empty) {
       const batch = writeBatch(db);
       MOCK_STUDENTS.forEach(student => {
-        batch.set(doc(db, 'students', student.id), student);
+        batch.set(doc(db, 'students', student.id), { ...student, academicYear: defaultConfig.academicYear });
       });
       await batch.commit();
       console.log('Initial students seeded to Firestore');
@@ -88,7 +88,7 @@ export async function seedInitialCloudDataIfNeeded(defaultConfig: AppConfig) {
     if (violationsSnap.empty) {
       const batch = writeBatch(db);
       INITIAL_VIOLATIONS.forEach(violation => {
-        batch.set(doc(db, 'violations', violation.id), violation);
+        batch.set(doc(db, 'violations', violation.id), { ...violation, academicYear: defaultConfig.academicYear });
       });
       await batch.commit();
       console.log('Initial violations seeded to Firestore');
@@ -162,16 +162,35 @@ export function subscribeToActivities(onData: (activities: UserActivityLog[]) =>
   });
 }
 
+function sanitizeForFirestore<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeForFirestore(item)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const cleaned: Record<string, unknown> = {};
+    Object.entries(value as Record<string, unknown>).forEach(([k, v]) => {
+      if (v !== undefined) {
+        cleaned[k] = sanitizeForFirestore(v);
+      }
+    });
+    return cleaned as T;
+  }
+  return value;
+}
+
 // Data synchronization mutations
 export async function saveCloudSettings(config: AppConfig) {
-  const cleanConfig = Object.fromEntries(
-    Object.entries(config).filter(([_, v]) => v !== undefined)
-  );
+  const cleanConfig = sanitizeForFirestore(config);
   await setDoc(doc(db, 'settings', 'app_config'), cleanConfig);
 }
 
 export async function saveCloudStudent(student: Student) {
-  await setDoc(doc(db, 'students', student.id), student);
+  const cleanStudent = Object.fromEntries(
+    Object.entries(student).filter(([_, v]) => v !== undefined)
+  );
+  await setDoc(doc(db, 'students', student.id), cleanStudent);
 }
 
 export async function deleteCloudStudent(studentId: string) {
@@ -180,27 +199,40 @@ export async function deleteCloudStudent(studentId: string) {
 
 export async function bulkDeleteCloudStudents(studentIds: string[]) {
   if (studentIds.length === 0) return;
-  const batch = writeBatch(db);
-  studentIds.forEach(id => {
-    batch.delete(doc(db, 'students', id));
-  });
-  await batch.commit();
+  const CHUNK_SIZE = 450;
+  for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
+    const batch = writeBatch(db);
+    studentIds.slice(i, i + CHUNK_SIZE).forEach(id => {
+      batch.delete(doc(db, 'students', id));
+    });
+    await batch.commit();
+  }
 }
 
 export async function clearAllCloudStudents() {
   const snap = await getDocs(collection(db, 'students'));
   if (snap.empty) return;
-  const batch = writeBatch(db);
-  snap.docs.forEach(d => batch.delete(d.ref));
-  await batch.commit();
+  const CHUNK_SIZE = 450;
+  for (let i = 0; i < snap.docs.length; i += CHUNK_SIZE) {
+    const batch = writeBatch(db);
+    snap.docs.slice(i, i + CHUNK_SIZE).forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  }
 }
 
 export async function bulkSaveCloudStudents(students: Student[]) {
-  const batch = writeBatch(db);
-  students.forEach(s => {
-    batch.set(doc(db, 'students', s.id), s);
-  });
-  await batch.commit();
+  if (students.length === 0) return;
+  const CHUNK_SIZE = 450;
+  for (let i = 0; i < students.length; i += CHUNK_SIZE) {
+    const batch = writeBatch(db);
+    students.slice(i, i + CHUNK_SIZE).forEach(s => {
+      const cleanStudent = Object.fromEntries(
+        Object.entries(s).filter(([_, v]) => v !== undefined)
+      );
+      batch.set(doc(db, 'students', s.id), cleanStudent);
+    });
+    await batch.commit();
+  }
 }
 
 export async function saveCloudViolation(violation: ViolationRecord) {
@@ -237,7 +269,25 @@ export async function bulkSaveCloudViolations(violations: ViolationRecord[]) {
 }
 
 export async function saveCloudUser(user: User) {
-  await setDoc(doc(db, 'users', user.id), user);
+  const cleanUser = Object.fromEntries(
+    Object.entries(user).filter(([_, v]) => v !== undefined)
+  );
+  await setDoc(doc(db, 'users', user.id), cleanUser);
+}
+
+export async function bulkSaveCloudUsers(users: User[]) {
+  if (users.length === 0) return;
+  const CHUNK_SIZE = 450;
+  for (let i = 0; i < users.length; i += CHUNK_SIZE) {
+    const batch = writeBatch(db);
+    users.slice(i, i + CHUNK_SIZE).forEach(u => {
+      const cleanUser = Object.fromEntries(
+        Object.entries(u).filter(([_, v]) => v !== undefined)
+      );
+      batch.set(doc(db, 'users', u.id), cleanUser);
+    });
+    await batch.commit();
+  }
 }
 
 export async function deleteCloudUser(userId: string) {
@@ -285,14 +335,14 @@ export async function resetCloudAllSampleData(defaultConfig: AppConfig) {
   const studentsSnap = await getDocs(collection(db, 'students'));
   const batch1 = writeBatch(db);
   studentsSnap.docs.forEach(d => batch1.delete(d.ref));
-  MOCK_STUDENTS.forEach(s => batch1.set(doc(db, 'students', s.id), s));
+  MOCK_STUDENTS.forEach(s => batch1.set(doc(db, 'students', s.id), { ...s, academicYear: defaultConfig.academicYear }));
   await batch1.commit();
 
   // Clear & reset violations
   const violationsSnap = await getDocs(collection(db, 'violations'));
   const batch2 = writeBatch(db);
   violationsSnap.docs.forEach(d => batch2.delete(d.ref));
-  INITIAL_VIOLATIONS.forEach(v => batch2.set(doc(db, 'violations', v.id), v));
+  INITIAL_VIOLATIONS.forEach(v => batch2.set(doc(db, 'violations', v.id), { ...v, academicYear: defaultConfig.academicYear }));
   await batch2.commit();
 
   // Clear & reset users

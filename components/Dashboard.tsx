@@ -1,20 +1,21 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { toast } from 'sonner';
-import { ViolationRecord, Student, ViolationCategory, AppTheme, AppConfig, User, UserActivityLog, UserRole } from '../types';
-import { PROVINSI_LOGO_URL } from '../constants';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,  Cell } from 'recharts';
-import { FileSpreadsheet, Trash2, Printer, Filter, X, Image as ImageIcon, ExternalLink, AlertCircle, TrendingUp, Users, AlertTriangle, List, User as UserIcon, School, Calendar, ArrowDownCircle, Bell, BellRing, Clock, FileText, Volume2, ShieldAlert, Activity, ChevronRight, ShieldCheck } from 'lucide-react';
+import { ViolationRecord, Student, ViolationCategory, AppTheme, AppConfig, User, UserActivityLog, UserRole, PrintDocumentSettings } from '../types';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { FileSpreadsheet, Trash2, Printer, Filter, X, Image as ImageIcon, ExternalLink, AlertCircle, TrendingUp, Users, AlertTriangle, List, User as UserIcon, School, Calendar, ArrowDownCircle, Bell, BellRing, Clock, FileText, Volume2, ShieldAlert, Activity, ChevronRight, ShieldCheck, FileDown } from 'lucide-react';
 import { CLASS_LIST } from '../constants';
-import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { getAllTardinessSummary, generateTardinessLetterPdf, generateAllTardinessRecapPdf, StudentTardinessInfo, playAlarmSound, isTardinessRecord } from '../utils/tardiness';
+import { getAllTardinessSummary, buildTardinessLetterPdfDoc, buildAllTardinessRecapPdfDoc, StudentTardinessInfo, playAlarmSound, isTardinessRecord } from '../utils/tardiness';
 import { downloadImageFile } from '../utils/evidenceImages';
 import { UserActivityHistory } from './UserActivityHistory';
 import { formatRelativeTime, getActionLabel } from '../utils/activityLogger';
 import ConfirmModal from './ConfirmModal';
 import { KopSurat } from './KopSurat';
-import { drawPdfKopSurat } from '../utils/pdfKop';
+import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import PrintPreviewModal from './PrintPreviewModal';
+import { exportRowsToSpreadsheet } from '../utils/exportHelpers';
+import { getDefaultUserAvatar, getUserAvatar } from '../utils/avatarHelpers';
 
 interface DashboardProps {
   violations: ViolationRecord[];
@@ -24,10 +25,11 @@ interface DashboardProps {
   theme: AppTheme;
   appConfig: AppConfig;
   currentUser: User;
-  onNavigateTab?: (tab: 'dashboard' | 'input' | 'students' | 'evidence' | 'settings') => void;
+  onNavigateTab?: (tab: 'dashboard' | 'input' | 'students' | 'evidence' | 'reports' | 'settings') => void;
   activities?: UserActivityLog[];
   onClearActivities?: () => void;
   users?: User[];
+  onSavePrintSettings?: (settings: PrintDocumentSettings) => Promise<void> | void;
 }
 
 type RecapMode = 'all' | 'class' | 'student';
@@ -43,7 +45,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   onNavigateTab,
   activities = [],
   onClearActivities,
-  users = []
+  users = [],
+  onSavePrintSettings
 }) => {
   // Admin Sub-Tab State: 'overview' (rekap/grafik) or 'activities' (log riwayat aktivitas)
   const [dashboardSubTab, setDashboardSubTab] = useState<'overview' | 'activities'>('overview');
@@ -169,6 +172,7 @@ const Dashboard: React.FC<DashboardProps> = ({
     const dataToExport = filteredViolations.map(v => {
       const student = students.find(s => s.id === v.studentId);
       return {
+        "Tahun Ajaran": v.academicYear || appConfig.academicYear,
         "Tanggal": new Date(v.date).toLocaleDateString('id-ID'),
         "Waktu": new Date(v.date).toLocaleTimeString('id-ID'),
         "Nama Siswa": v.studentName,
@@ -182,178 +186,182 @@ const Dashboard: React.FC<DashboardProps> = ({
       };
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan Pelanggaran");
-    
-    // Auto-width columns
-    const max_width = dataToExport.reduce((w, r) => Math.max(w, r["Deskripsi"].length), 10);
-    worksheet["!cols"] = [ 
-      { wch: 15 }, { wch: 10 }, { wch: 20 }, { wch: 5 }, { wch: 10 }, { wch: 15 }, { wch: Math.min(max_width, 50) }, { wch: 8 }, { wch: 15 }, { wch: 8 } 
-    ];
-
-    XLSX.writeFile(workbook, `Rekap_Pelanggaran_${new Date().toISOString().split('T')[0]}.xlsx`);
+    exportRowsToSpreadsheet(
+      dataToExport,
+      "Laporan Pelanggaran",
+      `Rekap_Pelanggaran_${new Date().toISOString().split('T')[0]}`,
+      [16, 12, 10, 24, 6, 12, 16, 40, 8, 18, 10],
+      'xls'
+    );
+    toast.success(`Berhasil mengunduh ${dataToExport.length} data rekap (.xls)!`);
   };
 
-  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const handleDownloadTardinessXls = () => {
+    if (displayedTardiness.length === 0) {
+      toast.error("Tidak ada data keterlambatan untuk diunduh.");
+      return;
+    }
+    const rows = displayedTardiness.map((item, idx) => ({
+      No: idx + 1,
+      "Nama Siswa": item.studentName,
+      Kelas: item.studentClass,
+      "Frekuensi Terlambat": item.count,
+      Status: item.statusLabel,
+      "Terakhir Terlambat": item.lastDate ? new Date(item.lastDate).toLocaleDateString('id-ID') : '-',
+      "Tindakan Rekomendasi": item.actionRequired,
+    }));
+    exportRowsToSpreadsheet(
+      rows,
+      "Rekap Keterlambatan",
+      `Rekap_Keterlambatan_${new Date().toISOString().split('T')[0]}`,
+      [6, 26, 12, 18, 22, 18, 38],
+      'xls'
+    );
+    toast.success(`Berhasil mengunduh ${rows.length} data keterlambatan (.xls)!`);
+  };
 
-  const handlePrintTardinessLetter = async (info: StudentTardinessInfo) => {
+  const handleDirectDownloadTardinessPdf = async () => {
+    if (allTardiness.length === 0) {
+      toast.error("Tidak ada data keterlambatan untuk diunduh.");
+      return;
+    }
+    try {
+      toast.info("Mengunduh PDF Rekapitulasi Keterlambatan...");
+      const settings = resolvePrintSettings(appConfig, currentUser, users);
+      const doc = await buildAllTardinessRecapPdfDoc(allTardiness, appConfig, currentUser, settings);
+      doc.save(`Rekap_Keterlambatan_${new Date().toISOString().split('T')[0]}.pdf`);
+      toast.success("PDF Rekapitulasi Keterlambatan berhasil diunduh.");
+    } catch (e) {
+      console.error(e);
+      toast.error("Gagal mengunduh PDF rekapitulasi keterlambatan.");
+    }
+  };
+
+  type PrintModalMode =
+    | null
+    | { type: 'recap' }
+    | { type: 'tardinessRecap' }
+    | { type: 'tardinessLetter'; info: StudentTardinessInfo; student: Student };
+
+  const [printModalMode, setPrintModalMode] = useState<PrintModalMode>(null);
+
+  const handlePrintTardinessLetter = (info: StudentTardinessInfo) => {
     const student = students.find(s => s.id === info.studentId);
     if (!student) {
       toast.error("Data siswa tidak ditemukan.");
       return;
     }
-    try {
-      toast.info("Menyiapkan Surat Panggilan Orang Tua...");
-      const url = await generateTardinessLetterPdf(student, info, appConfig, currentUser);
-      setPdfPreviewUrl(url);
-      toast.success("Surat Panggilan Orang Tua siap dicetak/diunduh.");
-    } catch (e) {
-      console.error(e);
-      toast.error("Gagal membuat surat panggilan.");
-    }
+    setPrintModalMode({ type: 'tardinessLetter', info, student });
   };
 
-  const handlePrintAllTardinessRecap = async () => {
+  const handlePrintAllTardinessRecap = () => {
     if (allTardiness.length === 0) {
       toast.error("Tidak ada data keterlambatan untuk dicetak.");
       return;
     }
-    try {
-      toast.info("Menyiapkan Rekapitulasi Keterlambatan...");
-      const url = await generateAllTardinessRecapPdf(allTardiness, appConfig, currentUser);
-      setPdfPreviewUrl(url);
-      toast.success("Rekapitulasi Keterlambatan siap dicetak/diunduh.");
-    } catch (e) {
-      console.error(e);
-      toast.error("Gagal membuat rekapitulasi keterlambatan.");
-    }
+    setPrintModalMode({ type: 'tardinessRecap' });
   };
 
-  const handlePrint = async () => {
-    try {
-      const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.getWidth();
-      
-      // Kop Surat Resmi
-      const currentY = await drawPdfKopSurat(doc, appConfig, 8);
+  const buildRecapPdfDoc = async (customSettings?: PrintDocumentSettings) => {
+    const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
+    const font = settings.documentFontFamily || 'helvetica';
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    
+    // Kop Surat Resmi
+    const currentY = await drawPdfKopSurat(doc, appConfig, 8, settings);
 
-      // Title
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      let title = "LAPORAN REKAPITULASI KESELURUHAN";
-      if (recapMode === 'student') title = "LAPORAN KEDISIPLINAN SISWA (INDIVIDU)";
-      else if (recapMode === 'class') title = `LAPORAN REKAPITULASI KELAS ${filterClass}`;
-      doc.text(title, pageWidth / 2, currentY + 6, { align: 'center' });
-      
+    // Title
+    doc.setFontSize(12);
+    doc.setFont(font, 'bold');
+    let title = "LAPORAN REKAPITULASI KESELURUHAN";
+    if (recapMode === 'student') title = "LAPORAN KEDISIPLINAN SISWA (INDIVIDU)";
+    else if (recapMode === 'class') title = `LAPORAN REKAPITULASI KELAS ${filterClass}`;
+    doc.text(title, pageWidth / 2, currentY + 6, { align: 'center' });
+    
+    doc.setFontSize(9);
+    doc.setFont(font, 'normal');
+    const periodeStr = (startDate || endDate) 
+      ? `Periode: ${startDate ? new Date(startDate).toLocaleDateString('id-ID') : 'Awal'} s/d ${endDate ? new Date(endDate).toLocaleDateString('id-ID') : 'Sekarang'}`
+      : `Tahun Ajaran: ${appConfig.academicYear}`;
+    doc.text(periodeStr, pageWidth / 2, currentY + 11, { align: 'center' });
+
+    // Individual Data
+    let tableStartY = currentY + 18;
+    if (recapMode === 'student' && selectedStudentData) {
+      doc.setFontSize(10);
+      doc.setFont(font, 'bold');
+      doc.text("BIODATA SISWA", 15, tableStartY);
+      doc.setFont(font, 'normal');
       doc.setFontSize(9);
-      doc.setFont('helvetica', 'normal');
-      const periodeStr = (startDate || endDate) 
-        ? `Periode: ${startDate ? new Date(startDate).toLocaleDateString('id-ID') : 'Awal'} s/d ${endDate ? new Date(endDate).toLocaleDateString('id-ID') : 'Sekarang'}`
-        : `Tahun Ajaran: ${appConfig.academicYear}`;
-      doc.text(periodeStr, pageWidth / 2, currentY + 11, { align: 'center' });
-
-      // Individual Data
-      let tableStartY = currentY + 18;
-      if (recapMode === 'student' && selectedStudentData) {
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'bold');
-        doc.text("BIODATA SISWA", 15, tableStartY);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(9);
-        doc.text(`Nama Lengkap : ${selectedStudentData.name}`, 15, tableStartY + 6);
-        doc.text(`NIS / NISN    : ${selectedStudentData.nis} / ${selectedStudentData.nisn || '-'}`, 15, tableStartY + 11);
-        doc.text(`Kelas         : ${selectedStudentData.class}`, 15, tableStartY + 16);
-        
-        doc.setFont('helvetica', 'bold');
-        doc.text(`TOTAL POIN : ${selectedStudentData.totalPoints}`, pageWidth - 15, tableStartY + 6, { align: 'right' });
-        
-        tableStartY += 25;
-      }
-
-      // Table
-      const headers = ["Tanggal", "Siswa", "Kelas", "Kategori & Deskripsi", "Poin"];
-      const body = filteredViolations.map(v => [
-        new Date(v.date).toLocaleDateString('id-ID'),
-        v.studentName,
-        v.studentClass,
-        `${v.category}\n${v.description}`,
-        v.points > 0 ? `+${v.points}` : v.points
-      ]);
-
-      autoTable(doc, {
-        startY: tableStartY,
-        head: [headers],
-        body: body,
-        theme: 'grid',
-        styles: { fontSize: 8, cellPadding: 3 },
-        headStyles: { fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold', halign: 'center' },
-        columnStyles: {
-          0: { cellWidth: 25, halign: 'center' },
-          1: { cellWidth: recapMode === 'student' ? 0.1 : 40 },
-          2: { cellWidth: recapMode === 'student' ? 0.1 : 20, halign: 'center' },
-          3: { cellWidth: 'auto' },
-          4: { cellWidth: 15, halign: 'center', fontStyle: 'bold' }
-        },
-        didParseCell: (data) => {
-          if (recapMode === 'student' && (data.column.index === 1 || data.column.index === 2)) {
-            // Effectively hide columns
-            data.cell.styles.fontSize = 0.1;
-            data.cell.styles.cellPadding = 0;
-            data.cell.contentWidth = 0;
-          }
-        },
-      });
-
-      // Footer / Signatures
-      const finalY = (doc as any).lastAutoTable.finalY + 15;
-      const footerX = pageWidth - 15;
-      const location = 'Kudus';
+      doc.text(`Nama Lengkap : ${selectedStudentData.name}`, 15, tableStartY + 6);
+      doc.text(`NIS / NISN    : ${selectedStudentData.nis} / ${selectedStudentData.nisn || '-'}`, 15, tableStartY + 11);
+      doc.text(`Kelas / Absen : ${selectedStudentData.class} (No. Absen: ${selectedStudentData.absenNumber || '-'}) | Status: ${selectedStudentData.status || 'Aktif'}`, 15, tableStartY + 16);
       
-      doc.setFontSize(9);
-      const today = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
-      doc.text(`${location}, ${today}`, footerX, finalY, { align: 'right' });
-      doc.text("Mengetahui,", footerX, finalY + 5, { align: 'right' });
-      doc.text(recapMode === 'student' ? 'Orang Tua / Wali' : (currentUser.role === 'ADMIN' ? 'Admin' : 'Guru BK'), footerX, finalY + 10, { align: 'right' });
+      doc.setFont(font, 'bold');
+      doc.text(`TOTAL POIN : ${selectedStudentData.totalPoints}`, pageWidth - 15, tableStartY + 6, { align: 'right' });
       
-      doc.setFont('helvetica', 'bold');
-      doc.text(recapMode === 'student' ? "( ........................................ )" : currentUser.name, footerX, finalY + 40, { align: 'right' });
-      
-      if (recapMode !== 'student') {
-        doc.setFont('helvetica', 'normal');
-        if (currentUser.nip) {
-          doc.text(`NIP. ${currentUser.nip}`, footerX, finalY + 44, { align: 'right' });
+      tableStartY += 25;
+    }
+
+    // Table
+    const headers = ["Tanggal", "Siswa", "Kelas", "Kategori & Deskripsi", "Poin"];
+    const body = filteredViolations.map(v => [
+      new Date(v.date).toLocaleDateString('id-ID'),
+      v.studentName,
+      v.studentClass,
+      `${v.category}\n${v.description}`,
+      v.points > 0 ? `+${v.points}` : v.points
+    ]);
+
+    autoTable(doc, {
+      startY: tableStartY,
+      head: [headers],
+      body: body,
+      theme: 'grid',
+      styles: { font, fontSize: 8, cellPadding: 3 },
+      headStyles: { font, fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold', halign: 'center' },
+      columnStyles: {
+        0: { cellWidth: 25, halign: 'center' },
+        1: { cellWidth: recapMode === 'student' ? 0.1 : 40 },
+        2: { cellWidth: recapMode === 'student' ? 0.1 : 20, halign: 'center' },
+        3: { cellWidth: 'auto' },
+        4: { cellWidth: 15, halign: 'center', fontStyle: 'bold' }
+      },
+      didParseCell: (data) => {
+        if (recapMode === 'student' && (data.column.index === 1 || data.column.index === 2)) {
+          data.cell.styles.fontSize = 0.1;
+          data.cell.styles.cellPadding = 0;
+          data.cell.contentWidth = 0;
         }
-      }
+      },
+    });
 
-      // Automatically try to save if in a restricted environment or if user wants direct action
-      // But keeping preview as well for now
-      const pdfBlob = doc.output('blob');
-      const url = URL.createObjectURL(pdfBlob);
-      setPdfPreviewUrl(url);
-      
-      // Also provide a toast hint
-      toast.info("Pratinjau PDF telah dibuat.");
+    // Footer / Signatures
+    const finalY = (doc as any).lastAutoTable.finalY + 14;
+    drawPdfSignatures(doc, settings, appConfig, finalY);
+
+    return doc;
+  };
+
+  const handlePrint = () => {
+    setPrintModalMode({ type: 'recap' });
+  };
+
+  const handleDirectDownloadPdf = async () => {
+    if (filteredViolations.length === 0) {
+      toast.error("Tidak ada data untuk diunduh.");
+      return;
+    }
+    try {
+      const settings = resolvePrintSettings(appConfig, currentUser, users);
+      const doc = await buildRecapPdfDoc(settings);
+      doc.save(`SIPERSIS_Rekap_${recapMode}_${new Date().toISOString().split('T')[0]}.pdf`);
+      toast.success("PDF rekapitulasi berhasil diunduh.");
     } catch (error) {
-      console.error("PDF generation failed:", error);
-      toast.error("Gagal membuat PDF. Silakan coba lagi.");
+      console.error("PDF download failed:", error);
+      toast.error("Gagal mengunduh PDF. Silakan coba lagi.");
     }
-  };
-
-  const handleDownloadPdf = () => {
-    if (!pdfPreviewUrl) return;
-    const link = document.createElement('a');
-    link.href = pdfPreviewUrl;
-    link.download = `SIPERSIS_Rekap_${recapMode}_${new Date().getTime()}.pdf`;
-    link.click();
-    toast.success("PDF berhasil diunduh.");
-  };
-
-  const closePreview = () => {
-    if (pdfPreviewUrl) {
-      URL.revokeObjectURL(pdfPreviewUrl);
-    }
-    setPdfPreviewUrl(null);
   };
 
   const clearFilters = () => {
@@ -491,6 +499,8 @@ const Dashboard: React.FC<DashboardProps> = ({
           theme={theme}
           currentUser={currentUser}
           users={users}
+          appConfig={appConfig}
+          onSavePrintSettings={onSavePrintSettings}
         />
       ) : (
         <>
@@ -503,7 +513,12 @@ const Dashboard: React.FC<DashboardProps> = ({
                <Filter className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h4 className="font-bold text-slate-800 text-lg">Filter & Format Data</h4>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="font-bold text-slate-800 text-lg">Filter & Format Data</h4>
+                <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  TA {appConfig.academicYear}
+                </span>
+              </div>
               <p className="text-xs text-slate-500">Pilih mode tampilan untuk cetak laporan</p>
             </div>
           </div>
@@ -788,8 +803,22 @@ const Dashboard: React.FC<DashboardProps> = ({
               {tardinessFilterOnlyAlarm ? 'Tampilkan Semua' : 'Filter Alarm (≥3x) Saja'}
             </button>
             <button
+              onClick={handleDownloadTardinessXls}
+              className="px-3.5 py-2 bg-white hover:bg-teal-50 border border-teal-200 text-teal-700 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+              title="Unduh rekap keterlambatan dalam format Excel (.xls)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" /> Unduh XLS
+            </button>
+            <button
+              onClick={handleDirectDownloadTardinessPdf}
+              className="px-3.5 py-2 bg-white hover:bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+              title="Unduh langsung PDF Rekap Keterlambatan"
+            >
+              <FileDown className="w-3.5 h-3.5" /> Unduh PDF
+            </button>
+            <button
               onClick={handlePrintAllTardinessRecap}
-              className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5"
+              className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5 text-slate-500" /> Cetak Rekap Keterlambatan
             </button>
@@ -962,15 +991,23 @@ const Dashboard: React.FC<DashboardProps> = ({
             )}
             <button 
               onClick={handlePrint}
-              className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm hover:bg-slate-50 transition shadow-sm font-bold"
+              className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-3.5 py-2 rounded-xl text-sm hover:bg-slate-50 transition shadow-sm font-bold cursor-pointer"
             >
               <Printer className="w-4 h-4" /> Cetak PDF
             </button>
             <button 
-              onClick={handleDownloadExcel}
-              className={`flex items-center gap-2 bg-gradient-to-r ${theme.button} text-white px-4 py-2 rounded-xl text-sm transition shadow-md font-bold`}
+              onClick={handleDirectDownloadPdf}
+              className="flex items-center gap-2 bg-rose-600 hover:bg-rose-700 text-white px-3.5 py-2 rounded-xl text-sm transition shadow-md font-bold cursor-pointer"
+              title="Unduh langsung laporan rekapitulasi dalam format PDF"
             >
-              <FileSpreadsheet className="w-4 h-4" /> Unduh Excel
+              <FileDown className="w-4 h-4" /> Unduh PDF
+            </button>
+            <button 
+              onClick={handleDownloadExcel}
+              className={`flex items-center gap-2 bg-gradient-to-r ${theme.button} text-white px-4 py-2 rounded-xl text-sm transition shadow-md font-bold cursor-pointer`}
+              title="Unduh laporan rekapitulasi dalam format Excel (.xls)"
+            >
+              <FileSpreadsheet className="w-4 h-4" /> Unduh XLS
             </button>
           </div>
         </div>
@@ -1011,9 +1048,12 @@ const Dashboard: React.FC<DashboardProps> = ({
                          <td className="text-right">{selectedStudentData.gender === 'L' ? 'Laki-laki' : 'Perempuan'}</td>
                       </tr>
                       <tr>
-                         <td className="py-1">Kelas</td>
+                         <td className="py-1">Kelas / Absen</td>
                          <td>:</td>
-                         <td>{selectedStudentData.class}</td>
+                         <td>{selectedStudentData.class} (Absen: {selectedStudentData.absenNumber || '-'})</td>
+                         <td className="text-right">Status Siswa</td>
+                         <td className="text-center">:</td>
+                         <td className="text-right font-bold">{selectedStudentData.status || 'Aktif'}</td>
                       </tr>
                    </tbody>
                 </table>
@@ -1182,13 +1222,25 @@ const Dashboard: React.FC<DashboardProps> = ({
                   <div>
                     <div className="flex items-center justify-between gap-2 mb-1.5">
                       <div className="flex items-center gap-1.5 truncate">
-                        {act.userAvatar ? (
-                          <img src={act.userAvatar} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" referrerPolicy="no-referrer" />
-                        ) : (
-                          <div className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-bold flex items-center justify-center shrink-0">
-                            {act.userName.charAt(0)}
-                          </div>
-                        )}
+                        {(() => {
+                          const matchedUser = users.find(u => u.id === act.userId);
+                          const fallbackUser = matchedUser || { role: act.userRole, name: act.userName, username: '' };
+                          const avatarSrc = getUserAvatar({ ...fallbackUser, avatar: act.userAvatar || matchedUser?.avatar });
+                          return (
+                            <img
+                              src={avatarSrc}
+                              alt={act.userName}
+                              onError={(e) => {
+                                const fb = getDefaultUserAvatar(fallbackUser);
+                                if (!e.currentTarget.src.endsWith(fb)) {
+                                  e.currentTarget.src = fb;
+                                }
+                              }}
+                              className="w-5 h-5 rounded-full object-cover shrink-0 border border-slate-200"
+                              referrerPolicy="no-referrer"
+                            />
+                          );
+                        })()}
                         <span className="text-xs font-bold text-slate-800 truncate">{act.userName}</span>
                       </div>
                       <span className={`text-[9px] px-2 py-0.5 rounded font-bold border shrink-0 ${badge.bg} ${badge.color}`}>
@@ -1229,52 +1281,44 @@ const Dashboard: React.FC<DashboardProps> = ({
            </div>
        </div>
 
-      {/* PDF Preview Modal */}
-      {pdfPreviewUrl && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-in fade-in duration-300 print:hidden">
-          <div className="bg-slate-900 rounded-3xl shadow-2xl w-full max-w-5xl h-[90vh] flex flex-col overflow-hidden border border-slate-700">
-            <div className="p-4 bg-slate-800 border-b border-slate-700 flex justify-between items-center text-white shrink-0">
-               <div className="flex items-center gap-3">
-                  <div className="bg-rose-500/20 p-2 rounded-xl text-rose-400">
-                     <FileSpreadsheet className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-lg leading-none">Pratinjau Laporan PDF</h3>
-                    <p className="text-xs text-slate-400 mt-1">Silakan periksa dokumen sebelum mengunduh</p>
-                  </div>
-               </div>
-               <div className="flex gap-2">
-                 <button 
-                   onClick={handleDownloadPdf}
-                   className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition shadow-lg shadow-blue-900/20"
-                 >
-                   <ArrowDownCircle className="w-4 h-4" /> Unduh Sekarang
-                 </button>
-                 <button 
-                   onClick={closePreview}
-                   className="bg-slate-700 hover:bg-slate-600 text-white p-2 rounded-xl transition"
-                 >
-                   <X className="w-6 h-6" />
-                 </button>
-               </div>
-            </div>
-            <div className="flex-1 bg-slate-800 relative">
-               <iframe 
-                 src={pdfPreviewUrl} 
-                 className="w-full h-full border-0"
-                 title="PDF Preview"
-               />
-               {/* Fallback msg if iframe blocked */}
-               <div className="absolute inset-0 flex items-center justify-center -z-10 text-slate-400">
-                  Memuat Pratinjau PDF...
-               </div>
-            </div>
-            <div className="p-4 bg-slate-900 text-center text-xs text-slate-500 border-t border-slate-800">
-              Gunakan kontrol di dalam preview PDF untuk mencetak langsung jika didukung oleh browser Anda.
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Unified Print Settings & Preview Modal */}
+      <PrintPreviewModal
+        isOpen={printModalMode !== null}
+        title={
+          printModalMode?.type === 'tardinessLetter'
+            ? `Surat Panggilan Ortu — ${printModalMode.student.name}`
+            : printModalMode?.type === 'tardinessRecap'
+            ? 'Pratinjau Rekapitulasi Keterlambatan'
+            : 'Pratinjau & Pengaturan Cetak Laporan'
+        }
+        fileNamePrefix={
+          printModalMode?.type === 'tardinessLetter'
+            ? `Surat_Panggilan_${printModalMode.student.name.replace(/\s+/g, '_')}`
+            : printModalMode?.type === 'tardinessRecap'
+            ? 'Rekap_Keterlambatan'
+            : `SIPERSIS_Rekap_${recapMode}`
+        }
+        appConfig={appConfig}
+        currentUser={currentUser}
+        users={users}
+        onClose={() => setPrintModalMode(null)}
+        onSaveDefaultSettings={onSavePrintSettings}
+        buildPdfDoc={async (settings) => {
+          if (printModalMode?.type === 'tardinessLetter') {
+            return buildTardinessLetterPdfDoc(
+              printModalMode.student,
+              printModalMode.info,
+              appConfig,
+              currentUser,
+              settings
+            );
+          }
+          if (printModalMode?.type === 'tardinessRecap') {
+            return buildAllTardinessRecapPdfDoc(allTardiness, appConfig, currentUser, settings);
+          }
+          return buildRecapPdfDoc(settings);
+        }}
+      />
 
       {/* Image Preview Modal */}
       {previewImage && (

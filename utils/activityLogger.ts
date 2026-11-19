@@ -1,5 +1,6 @@
 import { UserActivityLog, ActivityType, UserRole } from '../types';
-import * as XLSX from 'xlsx';
+import { DEFAULT_AVATARS } from './avatarHelpers';
+import { exportRowsToSpreadsheet } from './exportHelpers';
 
 export const INITIAL_ACTIVITIES: UserActivityLog[] = [
   {
@@ -8,7 +9,7 @@ export const INITIAL_ACTIVITIES: UserActivityLog[] = [
     userId: 'u-palupi',
     userName: 'Palupi Etikawati, S.Pd',
     userRole: UserRole.GURU,
-    userAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=150&q=80',
+    userAvatar: DEFAULT_AVATARS.GURU_P,
     action: 'ADD_VIOLATION',
     title: 'Pencatatan Keterlambatan Siswa',
     details: 'Mencatat pelanggaran: "Terlambat Masuk Sekolah (>15 Menit)" (+5 poin) untuk siswa Ahmad Zaki (X RPL 1)',
@@ -21,7 +22,7 @@ export const INITIAL_ACTIVITIES: UserActivityLog[] = [
     userId: 'u-lukman',
     userName: 'Lukman Darul Fuadi, S.Pd.Gr',
     userRole: UserRole.GURU,
-    userAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=150&q=80',
+    userAvatar: DEFAULT_AVATARS.GURU_L,
     action: 'ADD_VIOLATION',
     title: 'Pencatatan Reward Prestasi Siswa',
     details: 'Mencatat reward: "Juara 1 Lomba Karya Tulis Ilmiah Nasional" (-30 poin) untuk siswa Fajar Nugraha (XI TKJ 1)',
@@ -34,7 +35,7 @@ export const INITIAL_ACTIVITIES: UserActivityLog[] = [
     userId: 'u1',
     userName: 'Admin Sekolah',
     userRole: UserRole.ADMIN,
-    userAvatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=150&q=80',
+    userAvatar: DEFAULT_AVATARS.STAFF_L,
     action: 'LOGIN',
     title: 'Autentikasi Login Admin',
     details: 'Login berhasil ke panel manajemen SiPerSis via akun administrator',
@@ -47,7 +48,7 @@ export const INITIAL_ACTIVITIES: UserActivityLog[] = [
     userId: 'u-hery',
     userName: 'Hery Supriyadi, S.Pd',
     userRole: UserRole.GURU,
-    userAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=150&q=80',
+    userAvatar: DEFAULT_AVATARS.GURU_L,
     action: 'ADD_VIOLATION',
     title: 'Pencatatan Pelanggaran Atribut',
     details: 'Mencatat pelanggaran: "Seragam Tidak Lengkap / Atribut Hilang" (+5 poin) untuk siswa Budi Santoso (X RPL 1)',
@@ -60,7 +61,7 @@ export const INITIAL_ACTIVITIES: UserActivityLog[] = [
     userId: 'u-palupi',
     userName: 'Palupi Etikawati, S.Pd',
     userRole: UserRole.GURU,
-    userAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=150&q=80',
+    userAvatar: DEFAULT_AVATARS.GURU_P,
     action: 'LOGIN',
     title: 'Login Pengguna Guru',
     details: 'Login berhasil via akun guru "palupi"',
@@ -73,7 +74,7 @@ export const INITIAL_ACTIVITIES: UserActivityLog[] = [
     userId: 'u1',
     userName: 'Admin Sekolah',
     userRole: UserRole.ADMIN,
-    userAvatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=150&q=80',
+    userAvatar: DEFAULT_AVATARS.STAFF_L,
     action: 'USER_MANAGEMENT',
     title: 'Sinkronisasi Data Dewan Guru',
     details: 'Mendaftarkan 10 akun guru baru ke dalam sistem tata tertib sekolah',
@@ -86,7 +87,7 @@ export const INITIAL_ACTIVITIES: UserActivityLog[] = [
     userId: 'u-munawwaroh',
     userName: 'Dra. Munawwaroh',
     userRole: UserRole.GURU,
-    userAvatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=150&q=80',
+    userAvatar: DEFAULT_AVATARS.GURU_P,
     action: 'ADD_VIOLATION',
     title: 'Pencatatan Reward Tahfidz',
     details: 'Mencatat reward: "Khatam Hafalan Al-Qur\'an Juz 30" (-25 poin) untuk siswa Rizky Ramadhan (XI TKJ 1)',
@@ -99,7 +100,7 @@ export const INITIAL_ACTIVITIES: UserActivityLog[] = [
     userId: 'u1',
     userName: 'Admin Sekolah',
     userRole: UserRole.ADMIN,
-    userAvatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=150&q=80',
+    userAvatar: DEFAULT_AVATARS.STAFF_L,
     action: 'EXPORT_DATA',
     title: 'Unduh Berkas Rekap & Bukti',
     details: 'Mengunduh rekapitulasi data pelanggaran dan berkas bukti foto format Excel & ZIP',
@@ -112,7 +113,7 @@ export const INITIAL_ACTIVITIES: UserActivityLog[] = [
     userId: 'u1',
     userName: 'Admin Sekolah',
     userRole: UserRole.ADMIN,
-    userAvatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=150&q=80',
+    userAvatar: DEFAULT_AVATARS.STAFF_L,
     action: 'BULK_IMPORT',
     title: 'Impor Data Master Siswa',
     details: 'Sinkronisasi 50 data siswa baru kelas X dan XI via file format Excel',
@@ -178,7 +179,11 @@ export function formatRelativeTime(isoString: string): string {
   }
 }
 
-export function exportActivitiesToExcel(activities: UserActivityLog[], filename?: string): void {
+export function exportActivitiesToExcel(
+  activities: UserActivityLog[],
+  filename?: string,
+  format: 'xls' | 'xlsx' = 'xls'
+): void {
   const data = activities.map((act, index) => ({
     "No": index + 1,
     "Waktu": new Date(act.timestamp).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }),
@@ -190,20 +195,12 @@ export function exportActivitiesToExcel(activities: UserActivityLog[], filename?
     "Perangkat / Browser": act.device || 'Web Browser'
   }));
 
-  const worksheet = XLSX.utils.json_to_sheet(data);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Log Aktivitas");
-
-  worksheet["!cols"] = [
-    { wch: 5 },
-    { wch: 20 },
-    { wch: 25 },
-    { wch: 10 },
-    { wch: 18 },
-    { wch: 30 },
-    { wch: 55 },
-    { wch: 22 }
-  ];
-
-  XLSX.writeFile(workbook, filename || `Log_Aktivitas_User_${new Date().toISOString().split('T')[0]}.xlsx`);
+  const baseName = (filename || `Log_Aktivitas_User_${new Date().toISOString().split('T')[0]}`).replace(/\.(xls|xlsx)$/i, '');
+  exportRowsToSpreadsheet(
+    data,
+    'Log Aktivitas',
+    baseName,
+    [5, 20, 25, 10, 18, 30, 55, 22],
+    format
+  );
 }

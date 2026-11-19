@@ -1,4 +1,16 @@
-import { Student, User, UserRole, ViolationCategory, ViolationRecord, ViolationType, AppTheme, AppConfig } from './types';
+import {
+  Student,
+  User,
+  UserRole,
+  ViolationCategory,
+  ViolationRecord,
+  ViolationType,
+  AppTheme,
+  AppConfig,
+  KopSuratStyleConfig,
+  SignatureStyleConfig,
+  PrintDocumentSettings,
+} from './types';
 
 // Default Logo URL (SMA Negeri 1 Kudus Official Logo)
 export const DEFAULT_LOGO_URL = "/logo.png";
@@ -6,6 +18,48 @@ export const PROVINSI_LOGO_URL = "/provinsi_jateng.png";
 
 // Deprecated: Use AppConfig instead. Keeping for backward compatibility if needed temporarily.
 export const LOGO_URL = DEFAULT_LOGO_URL; 
+
+export const DEFAULT_KOP_STYLE: KopSuratStyleConfig = {
+  fontFamily: 'helvetica',
+  line1: { fontSize: 10.5, bold: false, italic: false, underline: false, align: 'center' },
+  line2: { fontSize: 12, bold: true, italic: false, underline: false, align: 'center' },
+  line3: { fontSize: 14, bold: true, italic: false, underline: false, align: 'center' },
+  line4: { fontSize: 8.5, bold: false, italic: false, underline: false, align: 'center' },
+  line5: { fontSize: 8.5, bold: false, italic: false, underline: false, align: 'center' },
+  line6: { fontSize: 8.5, bold: false, italic: false, underline: false, align: 'center' },
+};
+
+export const DEFAULT_SIGNATURE_STYLE: SignatureStyleConfig = {
+  fontSize: 9,
+  align: 'left',
+  boldHeader: false,
+  italicHeader: false,
+  underlineHeader: false,
+  boldName: true,
+  italicName: false,
+  underlineName: false,
+  boldNip: false,
+  italicNip: false,
+  underlineNip: false,
+  spacingHeight: 22,
+};
+
+export const DEFAULT_PRINT_SETTINGS: PrintDocumentSettings = {
+  showKop: true,
+  showKepsekSignature: true,
+  showStaffSignature: true,
+  kepsekPosition: 'left',
+  staffPosition: 'right',
+  kepsekTitle: 'Kepala Sekolah',
+  staffUserId: 'CURRENT_USER',
+  staffRoleTitle: 'Guru BK / Admin',
+  staffName: '',
+  staffNip: '',
+  cityLabel: 'Kudus',
+  documentFontFamily: 'helvetica',
+  kopStyle: DEFAULT_KOP_STYLE,
+  signatureStyle: DEFAULT_SIGNATURE_STYLE,
+};
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
   schoolName: 'SMA Negeri 1 Kudus',
@@ -15,6 +69,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   website: 'http://sma1kudus.sch.id',
   email: 'sma1kds@yahoo.co.id',
   academicYear: '2026 / 2027',
+  academicYears: ['2025 / 2026', '2026 / 2027', '2027 / 2028', '2028 / 2029'],
   principalName: 'Drs. H. Purnomo, M.Pd',
   principalNip: '19680101 199003 1 001',
   theme: 'striking',
@@ -26,6 +81,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   phone: '0291-431368',
   fax: '0291-431368',
   provinsiLogoUrl: '/provinsi_jateng.png',
+  printSettings: DEFAULT_PRINT_SETTINGS,
 };
 
 // Generator Kelas Otomatis
@@ -91,16 +147,16 @@ export const THEMES: Record<string, AppTheme> = {
 };
 
 export const MOCK_STUDENTS: Student[] = [
-  { id: 's1', nis: '102301', nisn: '0061234501', name: 'Ahmad Rizky Pratama', class: 'X E 1', gender: 'L', totalPoints: 25, parentPhone: '081234567890', avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80' },
-  { id: 's2', nis: '102302', nisn: '0061234502', name: 'Siti Nurhaliza', class: 'X E 1', gender: 'P', totalPoints: 10, parentPhone: '081234567891', avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=200&q=80' },
-  { id: 's3', nis: '112301', nisn: '0051234503', name: 'Budi Santoso', class: 'XI F 2', gender: 'L', totalPoints: 45, parentPhone: '081234567892', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80' },
-  { id: 's4', nis: '112302', nisn: '0051234504', name: 'Dewi Anggraeni', class: 'XI F 2', gender: 'P', totalPoints: 15, parentPhone: '081234567893', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&q=80' },
-  { id: 's5', nis: '102303', nisn: '0061234505', name: 'Dimas Setiawan', class: 'X E 3', gender: 'L', totalPoints: 60, parentPhone: '081234567894', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80' },
-  { id: 's6', nis: '122301', nisn: '0041234506', name: 'Fajar Ramadhan', class: 'XII F 1', gender: 'L', totalPoints: 30, parentPhone: '081234567895', avatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&w=200&q=80' },
-  { id: 's7', nis: '112303', nisn: '0051234507', name: 'Gita Permata', class: 'XI F 3', gender: 'P', totalPoints: 5, parentPhone: '081234567896', avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=200&q=80' },
-  { id: 's8', nis: '122302', nisn: '0041234508', name: 'Hendra Wijaya', class: 'XII F 2', gender: 'L', totalPoints: 20, parentPhone: '081234567897', avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&q=80' },
-  { id: 's9', nis: '102304', nisn: '0061234509', name: 'Nadia Safitri', class: 'X E 2', gender: 'P', totalPoints: 0, parentPhone: '081234567898', avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=200&q=80' },
-  { id: 's10', nis: '112304', nisn: '0051234510', name: 'Rizka Amelia', class: 'XI F 1', gender: 'P', totalPoints: 10, parentPhone: '081234567899', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80' }
+  { id: 's1', nis: '102301', nisn: '0061234501', name: 'Ahmad Rizky Pratama', class: 'X E 1', absenNumber: '01', birthPlace: 'Kudus', birthDate: '2010-03-14', email: 'ahmad.rizky@siswa.sma1kudus.sch.id', gender: 'L', address: 'Jl. Pemuda No. 12, Kec. Kota, Kudus', phone: '081234567890', parentPhone: '081234567890', status: 'Aktif', totalPoints: 25 },
+  { id: 's2', nis: '102302', nisn: '0061234502', name: 'Siti Nurhaliza', class: 'X E 1', absenNumber: '02', birthPlace: 'Kudus', birthDate: '2010-05-22', email: 'siti.nurhaliza@siswa.sma1kudus.sch.id', gender: 'P', address: 'Ds. Demaan RT 02 RW 01, Kec. Kota, Kudus', phone: '081234567891', parentPhone: '081234567891', status: 'Aktif', totalPoints: 10 },
+  { id: 's3', nis: '112301', nisn: '0051234503', name: 'Budi Santoso', class: 'XI F 2', absenNumber: '05', birthPlace: 'Jepara', birthDate: '2009-08-19', email: 'budi.santoso@siswa.sma1kudus.sch.id', gender: 'L', address: 'Jl. Sunan Muria No. 45, Bae, Kudus', phone: '081234567892', parentPhone: '081234567892', status: 'Aktif', totalPoints: 45 },
+  { id: 's4', nis: '112302', nisn: '0051234504', name: 'Dewi Anggraeni', class: 'XI F 2', absenNumber: '08', birthPlace: 'Kudus', birthDate: '2009-11-03', email: 'dewi.anggraeni@siswa.sma1kudus.sch.id', gender: 'P', address: 'Ds. Rendeng RT 04 RW 02, Kec. Kota, Kudus', phone: '081234567893', parentPhone: '081234567893', status: 'Aktif', totalPoints: 15 },
+  { id: 's5', nis: '102303', nisn: '0061234505', name: 'Dimas Setiawan', class: 'X E 3', absenNumber: '11', birthPlace: 'Pati', birthDate: '2010-01-27', email: 'dimas.setiawan@siswa.sma1kudus.sch.id', gender: 'L', address: 'Jl. Mejobo Permai Blok C-7, Mejobo, Kudus', phone: '081234567894', parentPhone: '081234567894', status: 'Aktif', totalPoints: 60 },
+  { id: 's6', nis: '122301', nisn: '0041234506', name: 'Fajar Ramadhan', class: 'XII F 1', absenNumber: '14', birthPlace: 'Kudus', birthDate: '2008-09-12', email: 'fajar.ramadhan@siswa.sma1kudus.sch.id', gender: 'L', address: 'Ds. Jati Wetan RT 01 RW 03, Kec. Jati, Kudus', phone: '081234567895', parentPhone: '081234567895', status: 'Aktif', totalPoints: 30 },
+  { id: 's7', nis: '112303', nisn: '0051234507', name: 'Gita Permata', class: 'XI F 3', absenNumber: '16', birthPlace: 'Demak', birthDate: '2009-06-08', email: 'gita.permata@siswa.sma1kudus.sch.id', gender: 'P', address: 'Jl. KHR Asnawi No. 23, Kec. Kota, Kudus', phone: '081234567896', parentPhone: '081234567896', status: 'Aktif', totalPoints: 5 },
+  { id: 's8', nis: '122302', nisn: '0041234508', name: 'Hendra Wijaya', class: 'XII F 2', absenNumber: '18', birthPlace: 'Kudus', birthDate: '2008-12-01', email: 'hendra.wijaya@siswa.sma1kudus.sch.id', gender: 'L', address: 'Ds. Dersalam RT 03 RW 04, Kec. Bae, Kudus', phone: '081234567897', parentPhone: '081234567897', status: 'Aktif', totalPoints: 20 },
+  { id: 's9', nis: '102304', nisn: '0061234509', name: 'Nadia Safitri', class: 'X E 2', absenNumber: '22', birthPlace: 'Kudus', birthDate: '2010-04-17', email: 'nadia.safitri@siswa.sma1kudus.sch.id', gender: 'P', address: 'Jl. Jenderal Sudirman No. 88, Kec. Kota, Kudus', phone: '081234567898', parentPhone: '081234567898', status: 'Aktif', totalPoints: 0 },
+  { id: 's10', nis: '112304', nisn: '0051234510', name: 'Rizka Amelia', class: 'XI F 1', absenNumber: '25', birthPlace: 'Semarang', birthDate: '2009-07-30', email: 'rizka.amelia@siswa.sma1kudus.sch.id', gender: 'P', address: 'Ds. Getas Pejaten RT 02 RW 02, Kec. Jati, Kudus', phone: '081234567899', parentPhone: '081234567899', status: 'Aktif', totalPoints: 10 }
 ];
 
 export const MOCK_USERS: User[] = [
@@ -109,108 +165,120 @@ export const MOCK_USERS: User[] = [
     name: 'Admin Sekolah', 
     username: 'admin',
     password: 'admin123',
-    role: UserRole.ADMIN, 
-    nip: '19700101 199501 1 001',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.ADMIN,
+    position: 'ADMIN',
+    gender: 'L',
+    nip: '19700101 199501 1 001'
   },
   { 
     id: 'u-palupi', 
     name: 'Palupi Etikawati, S.Pd', 
     username: 'palupi',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19860412 201101 2 003',
-    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'P',
+    nip: '19860412 201101 2 003'
   },
   { 
     id: 'u-lukman', 
     name: 'Lukman Darul Fuadi, S.Pd.Gr', 
     username: 'lukman',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19880715 201402 1 004',
-    avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'L',
+    nip: '19880715 201402 1 004'
   },
   { 
     id: 'u-hery', 
     name: 'Hery Supriyadi, S.Pd', 
     username: 'hery',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19820320 200801 1 005',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'L',
+    nip: '19820320 200801 1 005'
   },
   { 
     id: 'u-eko', 
     name: 'Eko Sarwono, S.Pd', 
     username: 'eko',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19790518 200604 1 006',
-    avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'L',
+    nip: '19790518 200604 1 006'
   },
   { 
     id: 'u-ayu', 
     name: 'Ayu Candra Permana Sari, S.Pd', 
     username: 'ayu',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19900910 201503 2 007',
-    avatar: 'https://images.unsplash.com/photo-1580894732444-8ecded7900cd?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'P',
+    nip: '19900910 201503 2 007'
   },
   { 
     id: 'u-fauzul', 
     name: 'Fauzul Muna, S.Pd', 
     username: 'fauzul',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19921104 201902 1 008',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'L',
+    nip: '19921104 201902 1 008'
   },
   { 
     id: 'u-munawwaroh', 
     name: 'Dra. Munawwaroh', 
     username: 'munawwaroh',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19670822 199303 2 009',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'P',
+    nip: '19670822 199303 2 009'
   },
   { 
     id: 'u-didik', 
     name: 'Didik Ardiato, S.Pd', 
     username: 'didik',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19840216 200901 1 010',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'L',
+    nip: '19840216 200901 1 010'
   },
   { 
     id: 'u-utomo', 
     name: 'Muhammad Utomo Aji Putro, S.Pd', 
     username: 'utomo',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19910625 201801 1 011',
-    avatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'L',
+    nip: '19910625 201801 1 011'
   },
   { 
     id: 'u-harjito', 
     name: 'Harjito Tri Khamdhani, S.Pd', 
     username: 'harjito',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19870130 201201 1 012',
-    avatar: 'https://images.unsplash.com/photo-1463453091185-61582044d556?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'L',
+    nip: '19870130 201201 1 012'
   },
   { 
     id: 'u2', 
     name: 'Pak Guru Budi', 
     username: 'guru',
     password: 'guru123',
-    role: UserRole.GURU, 
-    nip: '19851212 201001 1 002',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80' 
+    role: UserRole.GURU,
+    position: 'GURU',
+    gender: 'L',
+    nip: '19851212 201001 1 002'
   },
 ];
 

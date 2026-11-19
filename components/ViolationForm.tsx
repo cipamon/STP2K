@@ -8,6 +8,9 @@ import CameraModal from './CameraModal';
 import * as XLSX from 'xlsx';
 import { getEvidenceImageForViolation, EVIDENCE_PRESETS } from '../utils/evidenceImages';
 import { isGoogleSpreadsheetUrl } from '../utils/webhook';
+import { getStudentPhoto } from '../utils/studentHelpers';
+import { getDefaultStudentAvatar } from '../utils/avatarHelpers';
+import { exportAoaToSpreadsheet } from '../utils/exportHelpers';
 
 interface ViolationFormProps {
   currentUser: User;
@@ -16,9 +19,11 @@ interface ViolationFormProps {
   onSubmit: (record: ViolationRecord) => void;
   onBulkUpload: (records: ViolationRecord[]) => void;
   appConfig: AppConfig;
+  activeAcademicYear?: string;
 }
 
-const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, violationTypes, onSubmit, onBulkUpload, appConfig }) => {
+const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, violationTypes, onSubmit, onBulkUpload, appConfig, activeAcademicYear }) => {
+  const targetAcademicYear = activeAcademicYear || appConfig.academicYear;
   // Cascading Dropdown States
   const [selectedClass, setSelectedClass] = useState<string>('');
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
@@ -88,17 +93,15 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
   };
 
   const handleDownloadTemplate = () => {
-    // Define headers
     const headers = [['Tanggal (YYYY-MM-DD)', 'NIS', 'Nama Siswa', 'Kelas', 'Kategori (Ringan/Sedang/Berat/Prestasi)', 'Deskripsi', 'Poin']];
-    // Create workbook and worksheet
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(headers);
-    
-    // Set column width for better UX
-    ws['!cols'] = [{ wch: 20 }, { wch: 15 }, { wch: 30 }, { wch: 10 }, { wch: 25 }, { wch: 50 }, { wch: 10 }];
-
-    XLSX.utils.book_append_sheet(wb, ws, "Template Pelanggaran");
-    XLSX.writeFile(wb, "Template_Import_Pelanggaran_SiPerSis.xlsx");
+    exportAoaToSpreadsheet(
+      headers,
+      'Template Pelanggaran',
+      'Template_Import_Pelanggaran_SiPerSis',
+      [20, 15, 30, 10, 25, 50, 10],
+      'xls'
+    );
+    toast.success('Template XLS pelanggaran berhasil diunduh.');
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -177,6 +180,7 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
                  points: vPoints,
                  reporterName: currentUser.name,
                  evidenceUrl: undefined,
+                 academicYear: targetAcademicYear,
               });
            } else {
               if (vNis || vName) errorCount++;
@@ -239,6 +243,7 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
       points,
       reporterName: currentUser.name,
       evidenceUrl: finalEvidence,
+      academicYear: targetAcademicYear,
     };
 
     onSubmit(newRecord);
@@ -251,18 +256,23 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
     <>
       <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-100 max-w-4xl mx-auto">
         {/* Header - Dynamically colored by parent context/css generally, but hardcoded blue here for form consistency */}
-        <div className="bg-gradient-to-r from-blue-700 to-blue-500 -m-6 mb-6 p-6 rounded-t-xl text-white shadow-md flex justify-between items-center">
+        <div className="bg-gradient-to-r from-blue-700 to-blue-500 -m-6 mb-6 p-6 rounded-t-xl text-white shadow-md flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <div>
-            <h2 className="text-xl font-bold flex items-center gap-2">
-              <Upload className="w-6 h-6" />
-              Input Data Pelanggaran / Reward
-            </h2>
-            <p className="text-blue-50 text-sm mt-1">Catat perilaku siswa secara digital dan akurat.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <Upload className="w-6 h-6" />
+                Input Data Pelanggaran / Reward
+              </h2>
+              <span className="text-[11px] font-extrabold bg-white/20 border border-white/30 px-2.5 py-0.5 rounded-full backdrop-blur-xs">
+                TA {targetAcademicYear}
+              </span>
+            </div>
+            <p className="text-blue-50 text-sm mt-1">Catat perilaku siswa secara digital dan akurat untuk Tahun Ajaran {targetAcademicYear}.</p>
           </div>
           <button 
             type="button"
             onClick={() => setShowImportModal(true)}
-            className="flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-xl text-sm font-bold transition border border-white/30 backdrop-blur-sm"
+            className="flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-xl text-sm font-bold transition border border-white/30 backdrop-blur-sm shrink-0"
           >
             <Table className="w-4 h-4" /> Import Excel
           </button>
@@ -336,18 +346,31 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
           {/* Selected Student Card Detail - Blue Theme */}
           {selectedStudent && (
             <div className="bg-blue-50 p-4 rounded-xl flex items-center gap-4 animate-in fade-in slide-in-from-top-2 duration-300 border border-blue-200 shadow-sm">
-               {selectedStudent.photoUrl ? (
-                  <img src={selectedStudent.photoUrl} alt={selectedStudent.name} className="w-16 h-16 rounded-full object-cover border-2 border-white shadow-md" />
-               ) : (
-                  <div className="w-16 h-16 rounded-full bg-blue-200 flex items-center justify-center text-blue-600 shadow-inner">
-                    <UserIcon className="w-8 h-8" />
-                  </div>
-               )}
+                <img
+                  src={getStudentPhoto(selectedStudent)}
+                  alt={selectedStudent.name}
+                  onError={(e) => {
+                    const fallback = getDefaultStudentAvatar(selectedStudent.gender);
+                    if (!e.currentTarget.src.endsWith(fallback)) {
+                      e.currentTarget.src = fallback;
+                    }
+                  }}
+                  className="w-16 h-16 rounded-full object-cover border-2 border-white shadow-md"
+                  referrerPolicy="no-referrer"
+                />
                <div className="flex-1">
-                  <p className="font-bold text-lg text-blue-900">{selectedStudent.name}</p>
-                  <div className="flex flex-wrap gap-2 text-sm text-blue-700 mt-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-bold text-lg text-blue-900">{selectedStudent.name}</p>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      {selectedStudent.status || 'Aktif'}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs text-blue-700 mt-1">
                     <span className="font-mono bg-white px-2 py-0.5 rounded border border-blue-100 shadow-sm">NIS: {selectedStudent.nis}</span>
                     <span className="font-medium bg-white px-2 py-0.5 rounded border border-blue-100 shadow-sm">{selectedStudent.class}</span>
+                    {selectedStudent.absenNumber && (
+                      <span className="font-mono bg-white px-2 py-0.5 rounded border border-blue-100 shadow-sm">Absen: {selectedStudent.absenNumber}</span>
+                    )}
                     <span className="font-bold bg-white px-2 py-0.5 rounded border border-blue-100 shadow-sm text-blue-800">{selectedStudent.gender}</span>
                   </div>
                   <p className="text-xs mt-2 text-blue-600">Total Poin Saat Ini: <strong>{selectedStudent.totalPoints}</strong></p>

@@ -1,8 +1,7 @@
-import { ViolationRecord, Student, AppConfig, User } from '../types';
+import { ViolationRecord, Student, AppConfig, User, PrintDocumentSettings } from '../types';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { PROVINSI_LOGO_URL } from '../constants';
-import { drawPdfKopSurat } from './pdfKop';
+import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from './pdfKop';
 
 export const isTardinessRecord = (record: { description?: string; points?: number }): boolean => {
   if (!record || !record.description) return false;
@@ -130,38 +129,42 @@ export const playAlarmSound = () => {
 };
 
 // Generate Surat Panggilan Orang Tua Khusus Keterlambatan
-export const generateTardinessLetterPdf = async (
+export const buildTardinessLetterPdfDoc = async (
   student: Student,
   tardinessInfo: StudentTardinessInfo,
   appConfig: AppConfig,
-  currentUser: User
-): Promise<string> => {
+  currentUser: User,
+  printSettings?: PrintDocumentSettings
+): Promise<jsPDF> => {
+  const settings = printSettings || resolvePrintSettings(appConfig, currentUser);
+  const font = settings.documentFontFamily || 'helvetica';
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
 
   // 1. Kop Surat Resmi
-  let currentY = await drawPdfKopSurat(doc, appConfig, 8);
+  let currentY = await drawPdfKopSurat(doc, appConfig, 8, settings);
 
   // Surat Details
   doc.setFontSize(9);
-  doc.setFont('helvetica', 'normal');
+  doc.setFont(font, 'normal');
   const romanMonth = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'][new Date().getMonth()];
   const currentYear = new Date().getFullYear();
   const letterNumber = `421.3 / BK-${student.nis.slice(-3) || '001'} / ${romanMonth} / ${currentYear}`;
+  const city = settings.cityLabel?.trim() || 'Kudus';
 
   let letterY = currentY + 3;
   doc.text(`Nomor     : ${letterNumber}`, 15, letterY);
   doc.text(`Lampiran  : 1 (satu) Berkas Riwayat`, 15, letterY + 5);
   doc.text(`Hal       : SURAT PEMANGGILAN ORANG TUA / WALI (KETERLAMBATAN)`, 15, letterY + 10);
 
-  doc.text(`Kudus, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageWidth - 15, letterY, { align: 'right' });
+  doc.text(`${city}, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageWidth - 15, letterY, { align: 'right' });
 
   letterY += 18;
 
   doc.text("Kepada Yth.", 15, letterY);
-  doc.setFont('helvetica', 'bold');
+  doc.setFont(font, 'bold');
   doc.text(`Bapak / Ibu Orang Tua / Wali dari : ${student.name}`, 15, letterY + 5);
-  doc.setFont('helvetica', 'normal');
+  doc.setFont(font, 'normal');
   doc.text(`di Tempat`, 15, letterY + 10);
 
   letterY += 18;
@@ -176,11 +179,11 @@ export const generateTardinessLetterPdf = async (
   currentY += introLines.length * 4.5 + 2;
 
   // Biodata Siswa Box
-  doc.setFont('helvetica', 'bold');
+  doc.setFont(font, 'bold');
   doc.text(`• Nama Siswa      : ${student.name}`, 20, currentY);
   doc.text(`• NIS / NISN       : ${student.nis} / ${student.nisn || '-'}`, 20, currentY + 5);
   doc.text(`• Kelas            : ${student.class}`, 20, currentY + 10);
-  doc.setFont('helvetica', 'bold');
+  doc.setFont(font, 'bold');
   doc.setTextColor(180, 0, 0);
   doc.text(`• Frekuensi Terlambat : ${tardinessInfo.count} KALI (${tardinessInfo.statusLabel})`, 20, currentY + 15);
   doc.setTextColor(0, 0, 0);
@@ -189,14 +192,14 @@ export const generateTardinessLetterPdf = async (
 
   const noticeText = `Berdasarkan data sistem kedisiplinan siswa (SiPerSis), siswa tersebut telah tercatat terlambat hadir sebanyak ${tardinessInfo.count} kali yang telah mencapai ambang batas peringatan (${tardinessInfo.count >= 6 ? 'Peringatan Lanjutan / SP' : 'Peringatan Tahap I'}). Oleh karena itu, kami mengharap kehadiran Bapak/Ibu pada:`;
   const noticeLines = doc.splitTextToSize(noticeText, pageWidth - 30);
-  doc.setFont('helvetica', 'normal');
+  doc.setFont(font, 'normal');
   doc.text(noticeLines, 15, currentY);
   currentY += noticeLines.length * 4.5 + 3;
 
   // Jadwal Box
   const nextWorkDay = new Date();
   nextWorkDay.setDate(nextWorkDay.getDate() + 1);
-  if (nextWorkDay.getDay() === 0) nextWorkDay.setDate(nextWorkDay.getDate() + 1); // Sunday -> Monday
+  if (nextWorkDay.getDay() === 0) nextWorkDay.setDate(nextWorkDay.getDate() + 1);
 
   doc.setFillColor(248, 250, 252);
   doc.rect(15, currentY, pageWidth - 30, 24, 'F');
@@ -205,7 +208,7 @@ export const generateTardinessLetterPdf = async (
 
   doc.text(`Hari / Tanggal : ${nextWorkDay.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`, 20, currentY + 6);
   doc.text(`Pukul          : 08.00 WIB s.d. 10.00 WIB`, 20, currentY + 11);
-  doc.text(`Tempat         : Ruang Bimbingan & Konseling (BK) SMA Negeri 1 Kudus`, 20, currentY + 16);
+  doc.text(`Tempat         : Ruang Bimbingan & Konseling (BK) ${appConfig.schoolName}`, 20, currentY + 16);
   doc.text(`Keperluan      : Konsultasi & Pembinaan Khusus Kedisiplinan Siswa`, 20, currentY + 21);
 
   currentY += 29;
@@ -218,7 +221,6 @@ export const generateTardinessLetterPdf = async (
   doc.text("Demikian surat pemanggilan ini kami sampaikan. Atas perhatian dan kerja sama Bapak/Ibu, kami ucapkan terima kasih.", 15, currentY);
   currentY += 10;
 
-  // Lampiran Tabel Ringkasan Tanggal Keterlambatan
   if (tardinessInfo.records.length > 0) {
     const tableData = tardinessInfo.records.slice(0, 8).map((r, idx) => [
       (idx + 1).toString(),
@@ -233,8 +235,8 @@ export const generateTardinessLetterPdf = async (
       head: [["No", "Tanggal Terlambat", "Waktu", "Catatan Pelanggaran", "Pencatat/Piket"]],
       body: tableData,
       theme: 'grid',
-      styles: { fontSize: 7, cellPadding: 2 },
-      headStyles: { fillColor: [153, 27, 27], textColor: 255, halign: 'center' },
+      styles: { font, fontSize: 7, cellPadding: 2 },
+      headStyles: { font, fillColor: [153, 27, 27], textColor: 255, halign: 'center' },
       columnStyles: {
         0: { cellWidth: 10, halign: 'center' },
         1: { cellWidth: 32 },
@@ -244,60 +246,46 @@ export const generateTardinessLetterPdf = async (
       }
     });
 
-    currentY = (doc as any).lastAutoTable.finalY + 8;
+    currentY = (doc as any).lastAutoTable.finalY + 10;
   }
 
-  // Tanda Tangan
-  if (currentY > 230) {
-    doc.addPage();
-    currentY = 20;
-  }
+  drawPdfSignatures(doc, settings, appConfig, currentY);
+  return doc;
+};
 
-  const signY = currentY;
-  doc.setFontSize(9);
-  doc.setFont('helvetica', 'normal');
-
-  doc.text("Mengetahui,", 25, signY, { align: 'center' });
-  doc.text("Kepala SMA Negeri 1 Kudus", 25, signY + 5, { align: 'center' });
-  doc.setFont('helvetica', 'bold');
-  doc.text(appConfig.principalName, 25, signY + 28, { align: 'center' });
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.text(`NIP. ${appConfig.principalNip}`, 25, signY + 32, { align: 'center' });
-
-  doc.setFontSize(9);
-  doc.text(`Kudus, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageWidth - 45, signY, { align: 'center' });
-  doc.text("Guru Pembimbing BK / Wali Kelas,", pageWidth - 45, signY + 5, { align: 'center' });
-  doc.setFont('helvetica', 'bold');
-  doc.text(currentUser.name, pageWidth - 45, signY + 28, { align: 'center' });
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  if (currentUser.nip) {
-    doc.text(`NIP. ${currentUser.nip}`, pageWidth - 45, signY + 32, { align: 'center' });
-  }
-
+export const generateTardinessLetterPdf = async (
+  student: Student,
+  tardinessInfo: StudentTardinessInfo,
+  appConfig: AppConfig,
+  currentUser: User,
+  printSettings?: PrintDocumentSettings
+): Promise<string> => {
+  const doc = await buildTardinessLetterPdfDoc(student, tardinessInfo, appConfig, currentUser, printSettings);
   const blob = doc.output('blob');
   return URL.createObjectURL(blob);
 };
 
 // Generate Laporan Rekapitulasi Semua Siswa Terlambat
-export const generateAllTardinessRecapPdf = async (
+export const buildAllTardinessRecapPdfDoc = async (
   tardinessList: StudentTardinessInfo[],
   appConfig: AppConfig,
-  currentUser: User
-): Promise<string> => {
+  currentUser: User,
+  printSettings?: PrintDocumentSettings
+): Promise<jsPDF> => {
+  const settings = printSettings || resolvePrintSettings(appConfig, currentUser);
+  const font = settings.documentFontFamily || 'helvetica';
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
 
   // Kop Surat Resmi
-  const currentY = await drawPdfKopSurat(doc, appConfig, 8);
+  const currentY = await drawPdfKopSurat(doc, appConfig, 8, settings);
 
   // Title
   doc.setFontSize(12);
-  doc.setFont('helvetica', 'bold');
+  doc.setFont(font, 'bold');
   doc.text("REKAPITULASI SISWA SERING TERLAMBAT & STATUS ALARM", pageWidth / 2, currentY + 5, { align: 'center' });
   doc.setFontSize(9);
-  doc.setFont('helvetica', 'normal');
+  doc.setFont(font, 'normal');
   doc.text(`Tahun Ajaran: ${appConfig.academicYear} | Tanggal Cetak: ${new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`, pageWidth / 2, currentY + 10, { align: 'center' });
 
   const tableStartY = currentY + 16;
@@ -317,8 +305,8 @@ export const generateAllTardinessRecapPdf = async (
     head: [["No", "Nama Siswa", "Kelas", "Frekuensi", "Status Alarm", "Terakhir", "Tindakan Yang Diperlukan"]],
     body: tableBody,
     theme: 'grid',
-    styles: { fontSize: 8, cellPadding: 2.5 },
-    headStyles: { fillColor: [185, 28, 28], textColor: 255, halign: 'center' },
+    styles: { font, fontSize: 8, cellPadding: 2.5 },
+    headStyles: { font, fillColor: [185, 28, 28], textColor: 255, halign: 'center' },
     columnStyles: {
       0: { cellWidth: 10, halign: 'center' },
       1: { cellWidth: 38 },
@@ -331,21 +319,18 @@ export const generateAllTardinessRecapPdf = async (
   });
 
   const finalY = (doc as any).lastAutoTable.finalY + 12;
-  const signY = finalY > 230 ? 20 : finalY;
-  if (finalY > 230) doc.addPage();
+  drawPdfSignatures(doc, settings, appConfig, finalY);
 
-  doc.setFontSize(9);
-  doc.text("Mengetahui,", 30, signY, { align: 'center' });
-  doc.text("Kepala Sekolah,", 30, signY + 5, { align: 'center' });
-  doc.setFont('helvetica', 'bold');
-  doc.text(appConfig.principalName, 30, signY + 28, { align: 'center' });
+  return doc;
+};
 
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Kudus, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageWidth - 40, signY, { align: 'center' });
-  doc.text("Koordinator Guru BK,", pageWidth - 40, signY + 5, { align: 'center' });
-  doc.setFont('helvetica', 'bold');
-  doc.text(currentUser.name, pageWidth - 40, signY + 28, { align: 'center' });
-
+export const generateAllTardinessRecapPdf = async (
+  tardinessList: StudentTardinessInfo[],
+  appConfig: AppConfig,
+  currentUser: User,
+  printSettings?: PrintDocumentSettings
+): Promise<string> => {
+  const doc = await buildAllTardinessRecapPdfDoc(tardinessList, appConfig, currentUser, printSettings);
   const blob = doc.output('blob');
   return URL.createObjectURL(blob);
 };
