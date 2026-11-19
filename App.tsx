@@ -237,6 +237,7 @@ const App: React.FC = () => {
         const mergedPrintSettings: PrintDocumentSettings = {
           ...DEFAULT_PRINT_SETTINGS,
           ...(parsed.printSettings || {}),
+          showPoints: parsed.printSettings?.showPoints ?? DEFAULT_PRINT_SETTINGS.showPoints,
           kopStyle: {
             fontFamily: parsed.printSettings?.kopStyle?.fontFamily || DEFAULT_KOP_STYLE.fontFamily,
             line1: { ...DEFAULT_KOP_STYLE.line1, ...(parsed.printSettings?.kopStyle?.line1 || {}) },
@@ -415,6 +416,7 @@ const App: React.FC = () => {
             const mergedPrintSettings: PrintDocumentSettings = {
               ...DEFAULT_PRINT_SETTINGS,
               ...(remoteConfig.printSettings || {}),
+              showPoints: remoteConfig.printSettings?.showPoints ?? DEFAULT_PRINT_SETTINGS.showPoints,
               kopStyle: {
                 fontFamily: remoteConfig.printSettings?.kopStyle?.fontFamily || DEFAULT_KOP_STYLE.fontFamily,
                 line1: { ...DEFAULT_KOP_STYLE.line1, ...(remoteConfig.printSettings?.kopStyle?.line1 || {}) },
@@ -2142,19 +2144,28 @@ const App: React.FC = () => {
                                     <div className="p-4 bg-emerald-50/50 border border-emerald-200 rounded-xl space-y-3">
                                       <div>
                                         <h6 className="text-xs font-extrabold text-emerald-950 uppercase tracking-wider">
-                                          Pengaturan Default Tampil Kop, TTD &amp; Font Dokumen
+                                          Pengaturan Default Tampil Kop, TTD, Poin &amp; Font Dokumen
                                         </h6>
                                         <p className="text-[11px] text-emerald-800/80 mt-0.5">
                                           Anda tetap dapat mengubah opsi ini sebelum mencetak dari jendela Pratinjau Cetak.
                                         </p>
                                       </div>
-                                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
                                         <label className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-emerald-200 text-xs font-bold text-slate-700 cursor-pointer">
                                           <span>Tampilkan Kop Surat</span>
                                           <input
                                             type="checkbox"
                                             checked={resolvedPrint.showKop}
                                             onChange={(e) => updateTempPrint({ showKop: e.target.checked })}
+                                            className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                                          />
+                                        </label>
+                                        <label className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-emerald-200 text-xs font-bold text-slate-700 cursor-pointer">
+                                          <span>Tampilkan Poin</span>
+                                          <input
+                                            type="checkbox"
+                                            checked={resolvedPrint.showPoints !== false}
+                                            onChange={(e) => updateTempPrint({ showPoints: e.target.checked })}
                                             className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
                                           />
                                         </label>

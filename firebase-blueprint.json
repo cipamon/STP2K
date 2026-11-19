@@ -104,7 +104,7 @@
         "provinsiLogoUrl": { "type": "string" },
         "webhookUrl": { "type": "string" },
         "webhookEnabled": { "type": "boolean" },
-        "printSettings": { "type": "object", "description": "Default print, Kop Surat typography, and signature layout settings" }
+        "printSettings": { "type": "object", "description": "Default print, Kop Surat typography, signature layout, and points visibility settings" }
       },
       "required": ["schoolName", "academicYear", "theme"]
     }

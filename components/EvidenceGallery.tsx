@@ -220,6 +220,7 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
 
   const buildEvidencePdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
+    const showPoints = settings.showPoints !== false;
     const font = settings.documentFontFamily || 'helvetica';
     const doc = new jsPDF({ orientation: 'landscape' });
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -233,32 +234,62 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
     doc.setFont(font, 'normal');
     doc.text(`Tahun Ajaran: ${appConfig.academicYear} • Total ${filteredRecords.length} Dokumentasi`, pageWidth / 2, currentY + 11, { align: 'center' });
 
+    const headRow = showPoints
+      ? ['No', 'Tanggal', 'Nama Siswa', 'Kelas', 'Kategori', 'Deskripsi Kejadian', 'Poin', 'Pelapor']
+      : ['No', 'Tanggal', 'Nama Siswa', 'Kelas', 'Kategori', 'Deskripsi Kejadian', 'Pelapor'];
+
+    const bodyRows = filteredRecords.map((r, idx) =>
+      showPoints
+        ? [
+            idx + 1,
+            r.date ? new Date(r.date).toLocaleDateString('id-ID') : '-',
+            r.studentName,
+            r.studentClass,
+            r.category,
+            r.description,
+            r.points > 0 ? `+${r.points}` : r.points,
+            r.reporterName || 'Petugas',
+          ]
+        : [
+            idx + 1,
+            r.date ? new Date(r.date).toLocaleDateString('id-ID') : '-',
+            r.studentName,
+            r.studentClass,
+            r.category,
+            r.description,
+            r.reporterName || 'Petugas',
+          ]
+    );
+
+    const columnStyles: Record<number, any> = showPoints
+      ? {
+          0: { cellWidth: 10, halign: 'center' },
+          1: { cellWidth: 24, halign: 'center' },
+          2: { cellWidth: 42, fontStyle: 'bold' },
+          3: { cellWidth: 18, halign: 'center' },
+          4: { cellWidth: 22, halign: 'center' },
+          5: { cellWidth: 'auto' },
+          6: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
+          7: { cellWidth: 32 },
+        }
+      : {
+          0: { cellWidth: 10, halign: 'center' },
+          1: { cellWidth: 24, halign: 'center' },
+          2: { cellWidth: 42, fontStyle: 'bold' },
+          3: { cellWidth: 18, halign: 'center' },
+          4: { cellWidth: 22, halign: 'center' },
+          5: { cellWidth: 'auto' },
+          6: { cellWidth: 34 },
+        };
+
     autoTable(doc, {
       startY: currentY + 17,
-      head: [['No', 'Tanggal', 'Nama Siswa', 'Kelas', 'Kategori', 'Deskripsi Kejadian', 'Poin', 'Pelapor']],
-      body: filteredRecords.map((r, idx) => [
-        idx + 1,
-        r.date ? new Date(r.date).toLocaleDateString('id-ID') : '-',
-        r.studentName,
-        r.studentClass,
-        r.category,
-        r.description,
-        r.points > 0 ? `+${r.points}` : r.points,
-        r.reporterName || 'Petugas',
-      ]),
+      head: [headRow],
+      body: bodyRows,
       theme: 'grid',
       styles: { fontSize: 8, cellPadding: 2.5, valign: 'middle', font },
       headStyles: { fillColor: [79, 70, 229], textColor: 255, halign: 'center', font },
-      columnStyles: {
-        0: { cellWidth: 10, halign: 'center' },
-        1: { cellWidth: 24, halign: 'center' },
-        2: { cellWidth: 42, fontStyle: 'bold' },
-        3: { cellWidth: 18, halign: 'center' },
-        4: { cellWidth: 22, halign: 'center' },
-        5: { cellWidth: 'auto' },
-        6: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
-        7: { cellWidth: 32 },
-      },
+      columnStyles,
     });
 
     const finalY = ((doc as any).lastAutoTable?.finalY || currentY + 30) + 12;

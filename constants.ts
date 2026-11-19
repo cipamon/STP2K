@@ -46,6 +46,7 @@ export const DEFAULT_SIGNATURE_STYLE: SignatureStyleConfig = {
 
 export const DEFAULT_PRINT_SETTINGS: PrintDocumentSettings = {
   showKop: true,
+  showPoints: true,
   showKepsekSignature: true,
   showStaffSignature: true,
   kepsekPosition: 'left',

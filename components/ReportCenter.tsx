@@ -120,9 +120,12 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [onlyWithViolations, setOnlyWithViolations] = useState<boolean>(false);
 
-  // Photo Inclusion Controls
+  // Photo & Points Inclusion Controls
   const [includeStudentPhoto, setIncludeStudentPhoto] = useState<boolean>(true);
   const [includeEvidencePhoto, setIncludeEvidencePhoto] = useState<boolean>(true);
+  const [includePoints, setIncludePoints] = useState<boolean>(
+    () => resolvePrintSettings(appConfig, currentUser, users).showPoints !== false
+  );
 
   // Manual student checkbox selection (optional subset)
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
@@ -276,6 +279,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     setSelectedStudentIds([]);
     setIncludeStudentPhoto(true);
     setIncludeEvidencePhoto(true);
+    setIncludePoints(resolvePrintSettings(appConfig, currentUser, users).showPoints !== false);
   };
 
   // Preload photos safely for jsPDF
@@ -312,9 +316,12 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     return { studentPhotos, evidencePhotos };
   };
 
-  // Master PDF Builder supporting Kop, TTD, Font, Student Photos, and Evidence Photos
+  // Master PDF Builder supporting Kop, TTD, Font, Student Photos, Evidence Photos, and optional Points
   const buildReportPdfDoc = async (customSettings?: PrintDocumentSettings): Promise<jsPDF> => {
-    const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
+    const settings =
+      customSettings ||
+      resolvePrintSettings(appConfig, currentUser, users, { showPoints: includePoints });
+    const showPoints = settings.showPoints !== false;
     const font = settings.documentFontFamily || 'helvetica';
     const doc = new jsPDF({ orientation });
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -389,7 +396,9 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
           curY + 4.5
         );
         doc.text(
-          `Poin: ${stu.totalPoints} • Status: ${getStudentStatus(stu)}`,
+          showPoints
+            ? `Poin: ${stu.totalPoints} • Status: ${getStudentStatus(stu)}`
+            : `Status: ${getStudentStatus(stu)}`,
           rightMargin - 3,
           curY + 4.5,
           { align: 'right' }
@@ -454,29 +463,53 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
 
         // Violations / Achievements Subtable for this student
         if (stuRecs.length > 0) {
+          const dossierHead = showPoints
+            ? [['No', 'Tanggal', 'Kategori', 'Deskripsi Kejadian', 'Poin', 'Pelapor']]
+            : [['No', 'Tanggal', 'Kategori', 'Deskripsi Kejadian', 'Pelapor']];
+          const dossierBody = stuRecs.map((v, rIdx) =>
+            showPoints
+              ? [
+                  rIdx + 1,
+                  v.date ? new Date(v.date).toLocaleDateString('id-ID') : '-',
+                  v.category,
+                  v.description,
+                  v.points > 0 ? `+${v.points}` : v.points,
+                  v.reporterName || '-',
+                ]
+              : [
+                  rIdx + 1,
+                  v.date ? new Date(v.date).toLocaleDateString('id-ID') : '-',
+                  v.category,
+                  v.description,
+                  v.reporterName || '-',
+                ]
+          );
+          const dossierColStyles: Record<number, any> = showPoints
+            ? {
+                0: { cellWidth: 9, halign: 'center' },
+                1: { cellWidth: 22, halign: 'center' },
+                2: { cellWidth: 22, halign: 'center' },
+                3: { cellWidth: 'auto' },
+                4: { cellWidth: 13, halign: 'center', fontStyle: 'bold' },
+                5: { cellWidth: 28 },
+              }
+            : {
+                0: { cellWidth: 9, halign: 'center' },
+                1: { cellWidth: 22, halign: 'center' },
+                2: { cellWidth: 22, halign: 'center' },
+                3: { cellWidth: 'auto' },
+                4: { cellWidth: 30 },
+              };
+
           autoTable(doc, {
             startY: curY,
             margin: { left: leftMargin, right: leftMargin },
-            head: [['No', 'Tanggal', 'Kategori', 'Deskripsi Kejadian', 'Poin', 'Pelapor']],
-            body: stuRecs.map((v, rIdx) => [
-              rIdx + 1,
-              v.date ? new Date(v.date).toLocaleDateString('id-ID') : '-',
-              v.category,
-              v.description,
-              v.points > 0 ? `+${v.points}` : v.points,
-              v.reporterName || '-',
-            ]),
+            head: dossierHead,
+            body: dossierBody,
             theme: 'grid',
             styles: { fontSize: 7.5, cellPadding: 2, valign: 'middle', font },
             headStyles: { fillColor: [51, 65, 85], textColor: 255, halign: 'center', font },
-            columnStyles: {
-              0: { cellWidth: 9, halign: 'center' },
-              1: { cellWidth: 22, halign: 'center' },
-              2: { cellWidth: 22, halign: 'center' },
-              3: { cellWidth: 'auto' },
-              4: { cellWidth: 13, halign: 'center', fontStyle: 'bold' },
-              5: { cellWidth: 28 },
-            },
+            columnStyles: dossierColStyles,
           });
           curY = ((doc as any).lastAutoTable?.finalY || curY + 14) + 3;
         } else {
@@ -572,16 +605,25 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
 
       const headRow: string[] = ['No'];
       if (includeStudentPhoto) headRow.push('Foto Siswa');
-      headRow.push('Identitas Lengkap Siswa', 'Tanggal & Pelapor', 'Kategori & Poin', 'Deskripsi Kejadian');
+      headRow.push(
+        'Identitas Lengkap Siswa',
+        'Tanggal & Pelapor',
+        showPoints ? 'Kategori & Poin' : 'Kategori',
+        'Deskripsi Kejadian'
+      );
       if (includeEvidencePhoto) headRow.push('Foto Bukti');
 
       const bodyRows = targetViolations.map((rec, idx) => {
         const stu = studentById.get(rec.studentId);
         const studentSummary = stu
-          ? `${stu.name}\nNIS: ${stu.nis} | Kelas: ${stu.class}\nStatus: ${getStudentStatus(stu)} | Total: ${stu.totalPoints} Poin`
+          ? `${stu.name}\nNIS: ${stu.nis} | Kelas: ${stu.class}\nStatus: ${getStudentStatus(stu)}${
+              showPoints ? ` | Total: ${stu.totalPoints} Poin` : ''
+            }`
           : `${rec.studentName}\nKelas: ${rec.studentClass}`;
         const dateReport = `${rec.date ? new Date(rec.date).toLocaleDateString('id-ID') : '-'}\nPelapor: ${rec.reporterName || 'Petugas'}`;
-        const catPoint = `${rec.category}\n(${rec.points > 0 ? `+${rec.points}` : rec.points} Poin)`;
+        const catPoint = showPoints
+          ? `${rec.category}\n(${rec.points > 0 ? `+${rec.points}` : rec.points} Poin)`
+          : `${rec.category}`;
 
         const row: any[] = [idx + 1];
         if (includeStudentPhoto) row.push('');
@@ -686,7 +728,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         'Kelas',
         'Tempat, Tgl Lahir',
         'Kontak & Alamat',
-        'Status & Poin'
+        showPoints ? 'Status & Poin' : 'Status'
       );
 
       const bodyRows = targetStudents.map((s, idx) => {
@@ -698,7 +740,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
           s.class,
           formatBirthPlaceDate(s.birthPlace, s.birthDate, true),
           `${getStudentPhone(s) || '-'}${s.email ? `\n${s.email}` : ''}${s.address ? `\n${s.address}` : ''}`,
-          `${getStudentStatus(s)}\nPoin: ${s.totalPoints}`
+          showPoints ? `${getStudentStatus(s)}\nPoin: ${s.totalPoints}` : getStudentStatus(s)
         );
         return row;
       });
@@ -878,7 +920,9 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     setIsPreparingDownload(true);
     try {
       toast.info('Menyiapkan laporan PDF beserta foto...');
-      const settings = resolvePrintSettings(appConfig, currentUser, users);
+      const settings = resolvePrintSettings(appConfig, currentUser, users, {
+        showPoints: includePoints,
+      });
       const doc = await buildReportPdfDoc(settings);
       doc.save(
         `Laporan_Terpadu_${reportType}_${filterClass || 'Semua'}_${new Date()
@@ -1273,6 +1317,16 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
             Sertakan Foto Bukti Kejadian / Prestasi
           </label>
 
+          <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-amber-200 bg-amber-50/70 text-xs font-bold text-amber-900 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={includePoints}
+              onChange={(e) => setIncludePoints(e.target.checked)}
+              className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+            />
+            Tampilkan Poin di Cetak / PDF
+          </label>
+
           <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer">
             <input
               type="checkbox"
@@ -1394,17 +1448,19 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                           >
                             {getStudentStatus(stu)}
                           </span>
-                          <span
-                            className={`px-2 py-0.5 rounded-md text-[11px] font-black ${
-                              stu.totalPoints > 50
-                                ? 'bg-rose-100 text-rose-700'
-                                : stu.totalPoints < 0
-                                ? 'bg-emerald-100 text-emerald-700'
-                                : 'bg-blue-100 text-blue-700'
-                            }`}
-                          >
-                            {stu.totalPoints} Poin
-                          </span>
+                          {includePoints && (
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[11px] font-black ${
+                                stu.totalPoints > 50
+                                  ? 'bg-rose-100 text-rose-700'
+                                  : stu.totalPoints < 0
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'bg-blue-100 text-blue-700'
+                              }`}
+                            >
+                              {stu.totalPoints} Poin
+                            </span>
+                          )}
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 mt-1.5 text-[11px] text-slate-500">
@@ -1448,7 +1504,9 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                                   <AlertTriangle className="w-3 h-3" />
                                 )}
                                 <span className="truncate max-w-[200px]">{rec.description}</span>
-                                <span>({rec.points > 0 ? `+${rec.points}` : rec.points})</span>
+                                {includePoints && (
+                                  <span>({rec.points > 0 ? `+${rec.points}` : rec.points})</span>
+                                )}
                               </span>
                             ))}
                             {stuRecs.length > 3 && (
@@ -1510,6 +1568,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         onClose={() => setIsPrintModalOpen(false)}
         buildPdfDoc={buildReportPdfDoc}
         onSaveDefaultSettings={onSavePrintSettings}
+        defaultOverrides={{ showPoints: includePoints }}
       />
     </div>
   );

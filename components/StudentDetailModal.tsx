@@ -94,6 +94,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
 
   const buildStudentDetailPdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
+    const showPoints = settings.showPoints !== false;
     const font = settings.documentFontFamily || 'helvetica';
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -123,18 +124,36 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
     doc.text(`No. HP / Email : ${studentPhone || '-'} / ${student.email || '-'}`, 15, currentY + 46);
     doc.text(`Alamat        : ${student.address || '-'}`, 15, currentY + 51, { maxWidth: pageWidth - 30 });
     
-    doc.setFontSize(11);
-    doc.setFont(font, 'bold');
-    doc.text(`TOTAL POIN : ${student.totalPoints}`, pageWidth - 15, currentY + 21, { align: 'right' });
+    if (showPoints) {
+      doc.setFontSize(11);
+      doc.setFont(font, 'bold');
+      doc.text(`TOTAL POIN : ${student.totalPoints}`, pageWidth - 15, currentY + 21, { align: 'right' });
+    }
 
     // Table
-    const headers = [["Tanggal", "Kategori", "Deskripsi Kejadian", "Poin"]];
-    const body = studentRecords.map(record => [
-      new Date(record.date).toLocaleDateString('id-ID'),
-      record.category.toUpperCase(),
-      record.description,
-      record.category === ViolationCategory.PRESTASI ? record.points : `+${record.points}`
-    ]);
+    const headers = showPoints
+      ? [["Tanggal", "Kategori", "Deskripsi Kejadian", "Poin"]]
+      : [["Tanggal", "Kategori", "Deskripsi Kejadian"]];
+    const body = studentRecords.map(record => {
+      const row: any[] = [
+        new Date(record.date).toLocaleDateString('id-ID'),
+        record.category.toUpperCase(),
+        record.description,
+      ];
+      if (showPoints) {
+        row.push(record.category === ViolationCategory.PRESTASI ? record.points : `+${record.points}`);
+      }
+      return row;
+    });
+
+    const columnStyles: Record<number, any> = {
+      0: { cellWidth: 25, halign: 'center' },
+      1: { cellWidth: 25, halign: 'center' },
+      2: { cellWidth: 'auto' },
+    };
+    if (showPoints) {
+      columnStyles[3] = { cellWidth: 15, halign: 'center', fontStyle: 'bold' };
+    }
 
     autoTable(doc, {
       startY: currentY + 60,
@@ -143,12 +162,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
       theme: 'grid',
       styles: { font, fontSize: 8, cellPadding: 3 },
       headStyles: { font, fillColor: [51, 65, 85], textColor: 255, halign: 'center' },
-      columnStyles: {
-        0: { cellWidth: 25, halign: 'center' },
-        1: { cellWidth: 25, halign: 'center' },
-        2: { cellWidth: 'auto' },
-        3: { cellWidth: 15, halign: 'center', fontStyle: 'bold' }
-      }
+      columnStyles,
     });
 
     // Signatures
@@ -395,11 +409,13 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                    </tbody>
                 </table>
              </div>
-             <div className="text-right">
-                <div className="text-xl font-black bg-slate-100 p-4 border-2 border-black rounded-lg">
-                   TOTAL POIN : {student.totalPoints}
-                </div>
-             </div>
+             {appConfig.printSettings?.showPoints !== false && (
+               <div className="text-right">
+                  <div className="text-xl font-black bg-slate-100 p-4 border-2 border-black rounded-lg">
+                     TOTAL POIN : {student.totalPoints}
+                  </div>
+               </div>
+             )}
           </div>
         </div>
 
@@ -495,8 +511,8 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                <div className="hidden print:grid grid-cols-12 gap-2 font-bold text-sm border-b-2 border-black pb-2 mb-2">
                   <div className="col-span-2">Tanggal</div>
                   <div className="col-span-2">Kategori</div>
-                  <div className="col-span-6">Deskripsi Kejadian</div>
-                  <div className="col-span-2 text-right">Poin</div>
+                  <div className={appConfig.printSettings?.showPoints !== false ? 'col-span-6' : 'col-span-8'}>Deskripsi Kejadian</div>
+                  {appConfig.printSettings?.showPoints !== false && <div className="col-span-2 text-right">Poin</div>}
                </div>
 
                {studentRecords.map((record) => (
@@ -571,7 +587,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                        </div>
                     </div>
 
-                    <div className="flex-shrink-0 text-right print:col-span-2">
+                    <div className={`flex-shrink-0 text-right print:col-span-2 ${appConfig.printSettings?.showPoints === false ? 'print:hidden' : ''}`}>
                        <span className={`text-lg font-bold print:text-sm ${record.category === ViolationCategory.PRESTASI ? 'text-green-600' : 'text-red-600'} print:text-black`}>
                           {record.category === ViolationCategory.PRESTASI ? '' : '+'}{record.points}
                        </span>

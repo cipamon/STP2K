@@ -262,8 +262,11 @@ const Dashboard: React.FC<DashboardProps> = ({
     setPrintModalMode({ type: 'tardinessRecap' });
   };
 
+  const defaultShowPoints = appConfig.printSettings?.showPoints !== false;
+
   const buildRecapPdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
+    const showPoints = settings.showPoints !== false;
     const font = settings.documentFontFamily || 'helvetica';
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -298,21 +301,40 @@ const Dashboard: React.FC<DashboardProps> = ({
       doc.text(`NIS / NISN    : ${selectedStudentData.nis} / ${selectedStudentData.nisn || '-'}`, 15, tableStartY + 11);
       doc.text(`Kelas / Absen : ${selectedStudentData.class} (No. Absen: ${selectedStudentData.absenNumber || '-'}) | Status: ${selectedStudentData.status || 'Aktif'}`, 15, tableStartY + 16);
       
-      doc.setFont(font, 'bold');
-      doc.text(`TOTAL POIN : ${selectedStudentData.totalPoints}`, pageWidth - 15, tableStartY + 6, { align: 'right' });
+      if (showPoints) {
+        doc.setFont(font, 'bold');
+        doc.text(`TOTAL POIN : ${selectedStudentData.totalPoints}`, pageWidth - 15, tableStartY + 6, { align: 'right' });
+      }
       
       tableStartY += 25;
     }
 
     // Table
-    const headers = ["Tanggal", "Siswa", "Kelas", "Kategori & Deskripsi", "Poin"];
-    const body = filteredViolations.map(v => [
-      new Date(v.date).toLocaleDateString('id-ID'),
-      v.studentName,
-      v.studentClass,
-      `${v.category}\n${v.description}`,
-      v.points > 0 ? `+${v.points}` : v.points
-    ]);
+    const headers = showPoints
+      ? ["Tanggal", "Siswa", "Kelas", "Kategori & Deskripsi", "Poin"]
+      : ["Tanggal", "Siswa", "Kelas", "Kategori & Deskripsi"];
+    const body = filteredViolations.map(v => {
+      const row: any[] = [
+        new Date(v.date).toLocaleDateString('id-ID'),
+        v.studentName,
+        v.studentClass,
+        `${v.category}\n${v.description}`,
+      ];
+      if (showPoints) {
+        row.push(v.points > 0 ? `+${v.points}` : v.points);
+      }
+      return row;
+    });
+
+    const columnStyles: Record<number, any> = {
+      0: { cellWidth: 25, halign: 'center' },
+      1: { cellWidth: recapMode === 'student' ? 0.1 : 40 },
+      2: { cellWidth: recapMode === 'student' ? 0.1 : 20, halign: 'center' },
+      3: { cellWidth: 'auto' },
+    };
+    if (showPoints) {
+      columnStyles[4] = { cellWidth: 15, halign: 'center', fontStyle: 'bold' };
+    }
 
     autoTable(doc, {
       startY: tableStartY,
@@ -321,13 +343,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       theme: 'grid',
       styles: { font, fontSize: 8, cellPadding: 3 },
       headStyles: { font, fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold', halign: 'center' },
-      columnStyles: {
-        0: { cellWidth: 25, halign: 'center' },
-        1: { cellWidth: recapMode === 'student' ? 0.1 : 40 },
-        2: { cellWidth: recapMode === 'student' ? 0.1 : 20, halign: 'center' },
-        3: { cellWidth: 'auto' },
-        4: { cellWidth: 15, halign: 'center', fontStyle: 'bold' }
-      },
+      columnStyles,
       didParseCell: (data) => {
         if (recapMode === 'student' && (data.column.index === 1 || data.column.index === 2)) {
           data.cell.styles.fontSize = 0.1;
@@ -1035,9 +1051,15 @@ const Dashboard: React.FC<DashboardProps> = ({
                          <td className="w-32 py-1">Nama Lengkap</td>
                          <td className="w-4">:</td>
                          <td className="font-bold">{selectedStudentData.name}</td>
-                         <td className="w-32 text-right">Total Poin</td>
-                         <td className="w-4 text-center">:</td>
-                         <td className={`font-black w-24 text-right ${selectedStudentData.totalPoints >= 50 ? 'text-red-600' : ''}`}>{selectedStudentData.totalPoints}</td>
+                         {defaultShowPoints ? (
+                           <>
+                             <td className="w-32 text-right">Total Poin</td>
+                             <td className="w-4 text-center">:</td>
+                             <td className={`font-black w-24 text-right ${selectedStudentData.totalPoints >= 50 ? 'text-red-600' : ''}`}>{selectedStudentData.totalPoints}</td>
+                           </>
+                         ) : (
+                           <td colSpan={3}></td>
+                         )}
                       </tr>
                       <tr>
                          <td className="py-1">NIS / NISN</td>
@@ -1081,8 +1103,8 @@ const Dashboard: React.FC<DashboardProps> = ({
                 {/* Hide Student & Class Columns in Individual Mode Print */}
                 <th className={`px-6 py-4 print:px-2 print:py-2 ${recapMode === 'student' ? 'print:hidden' : ''}`}>Siswa</th>
                 <th className={`px-6 py-4 print:px-2 print:py-2 ${recapMode === 'student' ? 'print:hidden' : ''}`}>Kelas</th>
-                <th className="px-6 py-4 print:px-2 print:py-2">Kategori & Deskripsi</th>
-                <th className="px-6 py-4 text-center print:px-2 print:py-2">Poin</th>
+                <th className="px-6 py-4 print:px-2 print:py-2">Kategori &amp; Deskripsi</th>
+                <th className={`px-6 py-4 text-center print:px-2 print:py-2 ${!defaultShowPoints ? 'print:hidden' : ''}`}>Poin</th>
                 <th className="px-6 py-4 text-center print:hidden">Bukti</th>
                 <th className="px-6 py-4 text-right print:hidden">Aksi</th>
               </tr>
@@ -1138,7 +1160,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                         <span className="text-slate-700 font-medium leading-relaxed print:text-black">{v.description}</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-center align-top print:px-2 print:py-2">
+                    <td className={`px-6 py-4 text-center align-top print:px-2 print:py-2 ${!defaultShowPoints ? 'print:hidden' : ''}`}>
                       <span className={`font-black text-lg print:text-sm print:text-black
                          ${v.points < 0 ? 'text-green-500' : 'text-rose-500'}
                       `}>

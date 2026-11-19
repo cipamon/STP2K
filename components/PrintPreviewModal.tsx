@@ -346,6 +346,27 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     </label>
                   </div>
 
+                  {/* Tampilkan Poin */}
+                  <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-2xs flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-extrabold text-slate-800">Tampilkan Poin Laporan</div>
+                      <div className="text-[11px] text-slate-500">
+                        Sertakan kolom nilai poin &amp; total poin pada dokumen cetak / PDF
+                      </div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={settings.showPoints !== false}
+                        onChange={(e) =>
+                          setSettings((prev) => ({ ...prev, showPoints: e.target.checked }))
+                        }
+                        className="sr-only peer"
+                      />
+                      <div className="w-10 h-5 bg-slate-200 rounded-full peer peer-checked:bg-emerald-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5"></div>
+                    </label>
+                  </div>
+
                   {/* TTD Kepala Sekolah */}
                   <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-2xs space-y-2.5">
                     <div className="flex items-center justify-between gap-3">

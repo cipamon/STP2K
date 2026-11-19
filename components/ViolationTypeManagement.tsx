@@ -147,6 +147,7 @@ const ViolationTypeManagement: React.FC<ViolationTypeManagementProps> = ({
 
   const buildPdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(effectiveAppConfig, effectiveCurrentUser, users);
+    const showPoints = settings.showPoints !== false;
     const font = settings.documentFontFamily || 'helvetica';
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -157,24 +158,31 @@ const ViolationTypeManagement: React.FC<ViolationTypeManagementProps> = ({
     doc.setFont(font, 'bold');
     doc.text('MASTER DATA JENIS PELANGGARAN & REWARD', pageWidth / 2, startY, { align: 'center' });
 
+    const headRow = showPoints
+      ? ['No', 'Nama Pelanggaran / Reward', 'Kategori', 'Poin']
+      : ['No', 'Nama Pelanggaran / Reward', 'Kategori'];
+    const bodyRows = types.map((t, idx) =>
+      showPoints
+        ? [idx + 1, t.label, t.category, t.points > 0 ? `+${t.points}` : t.points]
+        : [idx + 1, t.label, t.category]
+    );
+    const columnStyles: Record<number, any> = {
+      0: { cellWidth: 12, halign: 'center' },
+      1: { cellWidth: 'auto' },
+      2: { cellWidth: 32, halign: 'center' },
+    };
+    if (showPoints) {
+      columnStyles[3] = { cellWidth: 18, halign: 'center', fontStyle: 'bold' };
+    }
+
     autoTable(doc, {
       startY: startY + 8,
-      head: [['No', 'Nama Pelanggaran / Reward', 'Kategori', 'Poin']],
-      body: types.map((t, idx) => [
-        idx + 1,
-        t.label,
-        t.category,
-        t.points > 0 ? `+${t.points}` : t.points,
-      ]),
+      head: [headRow],
+      body: bodyRows,
       theme: 'grid',
       styles: { fontSize: 8.5, cellPadding: 2.5, valign: 'middle', font },
       headStyles: { fillColor: [2, 132, 199], textColor: 255, halign: 'center', font },
-      columnStyles: {
-        0: { cellWidth: 12, halign: 'center' },
-        1: { cellWidth: 'auto' },
-        2: { cellWidth: 32, halign: 'center' },
-        3: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
-      },
+      columnStyles,
     });
 
     const finalY = ((doc as any).lastAutoTable?.finalY || startY + 25) + 12;

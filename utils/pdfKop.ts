@@ -77,6 +77,7 @@ export const resolvePrintSettings = (
     ...DEFAULT_PRINT_SETTINGS,
     ...(saved || {}),
     ...(overrides || {}),
+    showPoints: overrides?.showPoints ?? saved?.showPoints ?? DEFAULT_PRINT_SETTINGS.showPoints,
     kopStyle,
     signatureStyle,
   };

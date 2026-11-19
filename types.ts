@@ -125,6 +125,7 @@ export interface SignatureStyleConfig {
 
 export interface PrintDocumentSettings {
   showKop: boolean;
+  showPoints: boolean;
   showKepsekSignature: boolean;
   showStaffSignature: boolean;
   kepsekPosition: SignatureBoxPosition;

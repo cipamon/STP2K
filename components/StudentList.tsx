@@ -322,6 +322,7 @@ const StudentList: React.FC<StudentListProps> = ({
 
   const buildStudentPdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
+    const showPoints = settings.showPoints !== false;
     const font = settings.documentFontFamily || 'helvetica';
     const doc = new jsPDF({ orientation: 'landscape' });
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -345,52 +346,58 @@ const StudentList: React.FC<StudentListProps> = ({
       align: 'center',
     });
 
-    const headers = [
-      [
-        'Absen',
-        'NIS / NISN',
-        'Nama Lengkap',
-        'Kelas',
-        'L/P',
-        'Tempat, Tgl Lahir',
-        'No. HP & Email',
-        'Alamat',
-        'Status',
-        'Poin',
-      ],
+    const baseHeaders = [
+      'Absen',
+      'NIS / NISN',
+      'Nama Lengkap',
+      'Kelas',
+      'L/P',
+      'Tempat, Tgl Lahir',
+      'No. HP & Email',
+      'Alamat',
+      'Status',
     ];
-    const body = filteredStudents.map((s, index) => [
-      s.absenNumber || index + 1,
-      `${s.nis}\n${s.nisn || '-'}`,
-      s.name,
-      s.class,
-      s.gender,
-      formatBirthPlaceDate(s.birthPlace, s.birthDate, true),
-      `${getStudentPhone(s) || '-'}\n${s.email || '-'}`,
-      s.address || '-',
-      getStudentStatus(s),
-      s.totalPoints,
-    ]);
+    if (showPoints) baseHeaders.push('Poin');
+
+    const body = filteredStudents.map((s, index) => {
+      const row: any[] = [
+        s.absenNumber || index + 1,
+        `${s.nis}\n${s.nisn || '-'}`,
+        s.name,
+        s.class,
+        s.gender,
+        formatBirthPlaceDate(s.birthPlace, s.birthDate, true),
+        `${getStudentPhone(s) || '-'}\n${s.email || '-'}`,
+        s.address || '-',
+        getStudentStatus(s),
+      ];
+      if (showPoints) row.push(s.totalPoints);
+      return row;
+    });
+
+    const columnStyles: Record<number, any> = {
+      0: { cellWidth: 13, halign: 'center' },
+      1: { cellWidth: 28 },
+      2: { cellWidth: 40, fontStyle: 'bold' },
+      3: { cellWidth: 18, halign: 'center' },
+      4: { cellWidth: 10, halign: 'center' },
+      5: { cellWidth: 34 },
+      6: { cellWidth: 42 },
+      7: { cellWidth: 'auto' },
+      8: { cellWidth: 18, halign: 'center' },
+    };
+    if (showPoints) {
+      columnStyles[9] = { cellWidth: 14, halign: 'center', fontStyle: 'bold' };
+    }
 
     autoTable(doc, {
       startY: currentY + 17,
-      head: headers,
+      head: [baseHeaders],
       body: body,
       theme: 'grid',
       styles: { fontSize: 7.5, cellPadding: 2.5, valign: 'middle', font },
       headStyles: { fillColor: [5, 150, 105], textColor: 255, halign: 'center', font },
-      columnStyles: {
-        0: { cellWidth: 13, halign: 'center' },
-        1: { cellWidth: 28 },
-        2: { cellWidth: 40, fontStyle: 'bold' },
-        3: { cellWidth: 18, halign: 'center' },
-        4: { cellWidth: 10, halign: 'center' },
-        5: { cellWidth: 34 },
-        6: { cellWidth: 42 },
-        7: { cellWidth: 'auto' },
-        8: { cellWidth: 18, halign: 'center' },
-        9: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
-      },
+      columnStyles,
     });
 
     const finalY = (doc as any).lastAutoTable.finalY + 12;
