@@ -43,6 +43,8 @@ export interface Student {
   photoUrl?: string;
   avatar?: string;
   status?: StudentStatus | string;
+  waliKelas?: string;
+  guruBk?: string;
   totalPoints: number;
   academicYear?: string;
 }
@@ -86,11 +88,32 @@ export interface AppTheme {
   sidebar: string; // Sidebar border/active color
 }
 
-export type PrintFontFamily = 'helvetica' | 'times' | 'courier';
+export type PrintFontFamily =
+  | 'arial'
+  | 'tahoma'
+  | 'verdana'
+  | 'calibri'
+  | 'trebuchet'
+  | 'segoe'
+  | 'helvetica'
+  | 'times'
+  | 'cambria'
+  | 'georgia'
+  | 'garamond'
+  | 'palatino'
+  | 'courier';
 export type PrintTextAlign = 'left' | 'center' | 'right' | 'justify';
 export type SignatureBoxPosition = 'left' | 'center' | 'right';
 
+export interface SignatureBlockLayout {
+  xPercent: number;   // 0..100 horizontal position within available travel range
+  yOffsetMm: number;  // -15..60 vertical offset in mm from base signature Y
+  widthMm: number;    // 42..130 block width in mm
+  heightMm: number;   // 8..55 signature blank vertical space in mm
+}
+
 export interface TextFormatStyle {
+  text?: string;
   fontSize?: number;
   bold?: boolean;
   italic?: boolean;
@@ -100,6 +123,8 @@ export interface TextFormatStyle {
 
 export interface KopSuratStyleConfig {
   fontFamily: PrintFontFamily;
+  lineSpacing?: number;
+  bottomSpacing?: number;
   line1: TextFormatStyle;
   line2: TextFormatStyle;
   line3: TextFormatStyle;
@@ -130,6 +155,8 @@ export interface PrintDocumentSettings {
   showStaffSignature: boolean;
   kepsekPosition: SignatureBoxPosition;
   staffPosition: SignatureBoxPosition;
+  kepsekLayout?: SignatureBlockLayout;
+  staffLayout?: SignatureBlockLayout;
   kepsekTitle: string;
   staffUserId: string;
   staffRoleTitle: string;

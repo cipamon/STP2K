@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { toast } from 'sonner';
 import { Student, User, AppConfig, ViolationRecord, PrintDocumentSettings } from '../types';
 import { CLASS_LIST } from '../constants';
@@ -27,6 +27,7 @@ import {
   Calendar,
   Eye,
   FileSpreadsheet,
+  Sliders,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -34,8 +35,10 @@ import autoTable from 'jspdf-autotable';
 import { getStudentTardinessInfo } from '../utils/tardiness';
 import ConfirmModal from './ConfirmModal';
 import { KopSurat } from './KopSurat';
-import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import { SignatureLayoutEditor } from './SignatureLayoutEditor';
+import { drawPdfKopSurat, drawPdfSignatures, getPdfFontFamily, resolvePrintSettings } from '../utils/pdfKop';
 import PrintPreviewModal from './PrintPreviewModal';
+import PrintSettingsPanel from './PrintSettingsPanel';
 import {
   STUDENT_STATUS_OPTIONS,
   compressStudentPhoto,
@@ -51,6 +54,8 @@ import {
 } from '../utils/studentHelpers';
 import { getDefaultStudentAvatar, normalizePhotoUrl } from '../utils/avatarHelpers';
 import { exportAoaToSpreadsheet, exportRowsToSpreadsheet } from '../utils/exportHelpers';
+import { loadStudentPdfPhoto, PdfImageAsset } from '../utils/pdfImages';
+import { StudentAvatar } from './StudentAvatar';
 
 interface StudentListProps {
   students: Student[];
@@ -97,6 +102,14 @@ const StudentList: React.FC<StudentListProps> = ({
   const [filterAlarmOnly, setFilterAlarmOnly] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [showPrePrintPanel, setShowPrePrintPanel] = useState(false);
+  const [draftPrintSettings, setDraftPrintSettings] = useState<PrintDocumentSettings>(() =>
+    resolvePrintSettings(appConfig, currentUser, users)
+  );
+
+  useEffect(() => {
+    setDraftPrintSettings(resolvePrintSettings(appConfig, currentUser, users));
+  }, [appConfig, currentUser, users]);
 
   // Delete Menu and Dialog States
   const [showDeleteMenu, setShowDeleteMenu] = useState(false);
@@ -120,7 +133,7 @@ const StudentList: React.FC<StudentListProps> = ({
     confirmText: 'Hapus',
   });
 
-  // Form States (13 structured fields)
+  // Form States (15 structured fields)
   const [nis, setNis] = useState('');
   const [nisn, setNisn] = useState('');
   const [name, setName] = useState('');
@@ -133,6 +146,8 @@ const StudentList: React.FC<StudentListProps> = ({
   const [phone, setPhone] = useState('');
   const [gender, setGender] = useState<'L' | 'P'>('L');
   const [status, setStatus] = useState<string>('Aktif');
+  const [waliKelas, setWaliKelas] = useState('');
+  const [guruBk, setGuruBk] = useState('');
   const [photoPreview, setPhotoPreview] = useState<string>('');
 
   // Bulk Upload State
@@ -140,6 +155,18 @@ const StudentList: React.FC<StudentListProps> = ({
   const [googleSheetUrl, setGoogleSheetUrl] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [selectedExcelFile, setSelectedExcelFile] = useState<File | null>(null);
+
+  const teacherSuggestions = useMemo(() => {
+    const names = new Set<string>();
+    users.forEach((u) => {
+      if (u.name) names.add(u.name);
+    });
+    students.forEach((s) => {
+      if (s.waliKelas) names.add(s.waliKelas);
+      if (s.guruBk) names.add(s.guruBk);
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b, 'id'));
+  }, [users, students]);
 
   const INITIAL_LIMIT = 10;
 
@@ -185,6 +212,8 @@ const StudentList: React.FC<StudentListProps> = ({
             s.email,
             s.address,
             phoneVal,
+            s.waliKelas,
+            s.guruBk,
             getStudentStatus(s),
           ]
             .filter(Boolean)
@@ -219,6 +248,8 @@ const StudentList: React.FC<StudentListProps> = ({
     setPhone('');
     setGender('L');
     setStatus('Aktif');
+    setWaliKelas('');
+    setGuruBk('');
     setPhotoPreview('');
     setIsUploadMode(false);
     setSelectedExcelFile(null);
@@ -239,6 +270,8 @@ const StudentList: React.FC<StudentListProps> = ({
     setPhone(getStudentPhone(student));
     setGender(student.gender || 'L');
     setStatus(getStudentStatus(student));
+    setWaliKelas(student.waliKelas || '');
+    setGuruBk(student.guruBk || '');
     setPhotoPreview(getRawStudentPhoto(student));
     setIsUploadMode(false);
     setSelectedExcelFile(null);
@@ -261,6 +294,8 @@ const StudentList: React.FC<StudentListProps> = ({
         'NO_HP',
         'JENIS_KELAMIN',
         'Status',
+        'Wali Kelas',
+        'Guru BK',
       ],
       [
         '102401',
@@ -276,16 +311,18 @@ const StudentList: React.FC<StudentListProps> = ({
         '081234567890',
         'L',
         'Aktif',
+        'Drs. Budi Santoso',
+        'Palupi Etikawati, S.Pd',
       ],
     ];
     exportAoaToSpreadsheet(
       headers,
       'Data Siswa',
       'Template_Import_Siswa_SiPerSis',
-      [12, 14, 28, 12, 10, 16, 15, 26, 24, 32, 15, 14, 12],
+      [12, 14, 28, 12, 10, 16, 15, 26, 24, 32, 15, 14, 12, 24, 24],
       'xls'
     );
-    toast.success('Template XLS lengkap berhasil diunduh.');
+    toast.success('Template XLS lengkap (15 kolom) berhasil diunduh.');
   };
 
   const handleExportExcel = () => {
@@ -307,6 +344,8 @@ const StudentList: React.FC<StudentListProps> = ({
       NO_HP: getStudentPhone(s) || '-',
       JENIS_KELAMIN: s.gender,
       Status: getStudentStatus(s),
+      'Wali Kelas': s.waliKelas || '-',
+      'Guru BK': s.guruBk || '-',
       'Total Poin': s.totalPoints,
       'Tahun Ajaran': s.academicYear || appConfig.academicYear,
     }));
@@ -314,7 +353,7 @@ const StudentList: React.FC<StudentListProps> = ({
       rows,
       'Data Siswa',
       `Data_Siswa_${filterClass || 'Semua'}_${new Date().toISOString().slice(0, 10)}`,
-      [12, 14, 26, 12, 10, 15, 15, 26, 24, 32, 15, 14, 12, 12, 14],
+      [12, 14, 26, 12, 10, 15, 15, 26, 24, 32, 15, 14, 12, 24, 24, 12, 14],
       'xls'
     );
     toast.success(`Berhasil mengunduh ${filteredStudents.length} data siswa (.xls)!`);
@@ -323,7 +362,7 @@ const StudentList: React.FC<StudentListProps> = ({
   const buildStudentPdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
     const showPoints = settings.showPoints !== false;
-    const font = settings.documentFontFamily || 'helvetica';
+    const font = getPdfFontFamily(settings.documentFontFamily);
     const doc = new jsPDF({ orientation: 'landscape' });
     const pageWidth = doc.internal.pageSize.getWidth();
 
@@ -346,11 +385,20 @@ const StudentList: React.FC<StudentListProps> = ({
       align: 'center',
     });
 
+    const studentPhotos = new Map<string, PdfImageAsset | null>();
+    await Promise.all(
+      filteredStudents.map(async (s) => {
+        const asset = await loadStudentPdfPhoto(s);
+        studentPhotos.set(s.id, asset);
+      })
+    );
+
     const baseHeaders = [
       'Absen',
+      'Foto',
       'NIS / NISN',
       'Nama Lengkap',
-      'Kelas',
+      'Kelas & Pembina',
       'L/P',
       'Tempat, Tgl Lahir',
       'No. HP & Email',
@@ -362,9 +410,10 @@ const StudentList: React.FC<StudentListProps> = ({
     const body = filteredStudents.map((s, index) => {
       const row: any[] = [
         s.absenNumber || index + 1,
+        '',
         `${s.nis}\n${s.nisn || '-'}`,
         s.name,
-        s.class,
+        `${s.class}\nWali: ${s.waliKelas || '-'}\nBK: ${s.guruBk || '-'}`,
         s.gender,
         formatBirthPlaceDate(s.birthPlace, s.birthDate, true),
         `${getStudentPhone(s) || '-'}\n${s.email || '-'}`,
@@ -376,18 +425,19 @@ const StudentList: React.FC<StudentListProps> = ({
     });
 
     const columnStyles: Record<number, any> = {
-      0: { cellWidth: 13, halign: 'center' },
-      1: { cellWidth: 28 },
-      2: { cellWidth: 40, fontStyle: 'bold' },
-      3: { cellWidth: 18, halign: 'center' },
-      4: { cellWidth: 10, halign: 'center' },
-      5: { cellWidth: 34 },
-      6: { cellWidth: 42 },
-      7: { cellWidth: 'auto' },
-      8: { cellWidth: 18, halign: 'center' },
+      0: { cellWidth: 11, halign: 'center' },
+      1: { cellWidth: 16, halign: 'center' },
+      2: { cellWidth: 25 },
+      3: { cellWidth: 34, fontStyle: 'bold' },
+      4: { cellWidth: 33 },
+      5: { cellWidth: 10, halign: 'center' },
+      6: { cellWidth: 30 },
+      7: { cellWidth: 38 },
+      8: { cellWidth: 'auto' },
+      9: { cellWidth: 18, halign: 'center' },
     };
     if (showPoints) {
-      columnStyles[9] = { cellWidth: 14, halign: 'center', fontStyle: 'bold' };
+      columnStyles[10] = { cellWidth: 13, halign: 'center', fontStyle: 'bold' };
     }
 
     autoTable(doc, {
@@ -395,9 +445,25 @@ const StudentList: React.FC<StudentListProps> = ({
       head: [baseHeaders],
       body: body,
       theme: 'grid',
-      styles: { fontSize: 7.5, cellPadding: 2.5, valign: 'middle', font },
-      headStyles: { fillColor: [5, 150, 105], textColor: 255, halign: 'center', font },
+      styles: { fontSize: 7.5, cellPadding: 2, valign: 'middle', minCellHeight: 17, font },
+      headStyles: { fillColor: [5, 150, 105], textColor: 255, halign: 'center', minCellHeight: 8, font },
       columnStyles,
+      didDrawCell: (data) => {
+        if (data.section !== 'body' || data.column.index !== 1) return;
+        const stu = filteredStudents[data.row.index];
+        if (!stu) return;
+        const asset = studentPhotos.get(stu.id);
+        if (!asset) return;
+        const boxW = Math.min(11, data.cell.width - 3);
+        const boxH = Math.min(14, data.cell.height - 2.5);
+        const x = data.cell.x + (data.cell.width - boxW) / 2;
+        const y = data.cell.y + (data.cell.height - boxH) / 2;
+        try {
+          doc.addImage(asset.dataUrl, asset.format, x, y, boxW, boxH);
+        } catch {
+          // ignore
+        }
+      },
     });
 
     const finalY = (doc as any).lastAutoTable.finalY + 12;
@@ -421,8 +487,7 @@ const StudentList: React.FC<StudentListProps> = ({
     }
 
     try {
-      const settings = resolvePrintSettings(appConfig, currentUser, users);
-      const doc = await buildStudentPdfDoc(settings);
+      const doc = await buildStudentPdfDoc(draftPrintSettings);
       doc.save(`Data_Siswa_${filterClass || 'Semua'}_${new Date().toISOString().slice(0, 10)}.pdf`);
       toast.success('File PDF data siswa berhasil diunduh!');
     } catch (error) {
@@ -515,6 +580,8 @@ const StudentList: React.FC<StudentListProps> = ({
         phone: findCol(['NO_HP', 'HP', 'NO_TELEPON', 'TELEPON', 'WA', 'NO_WA']),
         gender: findCol(['JENIS_KELAMIN', 'L/P', 'JK', 'GENDER', 'KELAMIN']),
         status: findCol(['STATUS', 'STATUS_SISWA']),
+        waliKelas: findCol(['WALI_KELAS', 'WALI', 'WALIKELAS']),
+        guruBk: findCol(['GURU_BK', 'BK', 'KONSELOR', 'PEMBIMBING_BK']),
       };
 
       // Fix NIS matching NISN if NIS column came after or NISN matched first
@@ -550,6 +617,8 @@ const StudentList: React.FC<StudentListProps> = ({
         let sphone = '';
         let sgenderRaw = '';
         let sstatusRaw = '';
+        let swaliKelas = '';
+        let sguruBk = '';
 
         if (hasFullHeader) {
           snis = cell(colIdx.nis);
@@ -565,8 +634,10 @@ const StudentList: React.FC<StudentListProps> = ({
           sphone = cell(colIdx.phone);
           sgenderRaw = cell(colIdx.gender);
           sstatusRaw = cell(colIdx.status);
+          swaliKelas = cell(colIdx.waliKelas);
+          sguruBk = cell(colIdx.guruBk);
         } else {
-          // Positional fallback: support both 5-column legacy format and 13-column format
+          // Positional fallback: support both 5-column legacy format and 13/15-column format
           snis = cell(0);
           snisn = cell(1);
           sname = cell(2);
@@ -584,6 +655,8 @@ const StudentList: React.FC<StudentListProps> = ({
             sphone = cell(10);
             sgenderRaw = cell(11);
             sstatusRaw = cell(12);
+            swaliKelas = cell(13);
+            sguruBk = cell(14);
           }
         }
 
@@ -604,6 +677,8 @@ const StudentList: React.FC<StudentListProps> = ({
             parentPhone: sphone || undefined,
             gender: normalizeGender(sgenderRaw),
             status: normalizeStudentStatus(sstatusRaw),
+            waliKelas: swaliKelas || undefined,
+            guruBk: sguruBk || undefined,
             totalPoints: 0,
             academicYear: targetAcademicYear,
           });
@@ -666,6 +741,8 @@ const StudentList: React.FC<StudentListProps> = ({
 
     const cleanPhoto = normalizePhotoUrl(photoPreview) || undefined;
     const cleanPhone = phone.trim() || undefined;
+    const cleanWaliKelas = waliKelas.trim() || undefined;
+    const cleanGuruBk = guruBk.trim() || undefined;
 
     if (editingStudent) {
       onUpdateStudent({
@@ -683,6 +760,8 @@ const StudentList: React.FC<StudentListProps> = ({
         parentPhone: cleanPhone || editingStudent.parentPhone,
         gender,
         status: status.trim() || 'Aktif',
+        waliKelas: cleanWaliKelas,
+        guruBk: cleanGuruBk,
         photoUrl: cleanPhoto,
         avatar: cleanPhoto,
         academicYear: editingStudent.academicYear || targetAcademicYear,
@@ -703,6 +782,8 @@ const StudentList: React.FC<StudentListProps> = ({
         parentPhone: cleanPhone,
         gender,
         status: status.trim() || 'Aktif',
+        waliKelas: cleanWaliKelas,
+        guruBk: cleanGuruBk,
         totalPoints: 0,
         photoUrl: cleanPhoto,
         academicYear: targetAcademicYear,
@@ -732,13 +813,16 @@ const StudentList: React.FC<StudentListProps> = ({
       message: (
         <div>
           <p className="mb-2">Apakah Anda yakin ingin menghapus data siswa berikut?</p>
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-            <div className="font-bold text-slate-800 text-sm">{student.name}</div>
-            <div className="text-xs text-slate-500">
-              NIS: {student.nis} {student.nisn ? `| NISN: ${student.nisn}` : ''}
-            </div>
-            <div className="text-xs text-slate-500">
-              Kelas: {student.class} | Absen: {student.absenNumber || '-'} | Status: {getStudentStatus(student)}
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center gap-3">
+            <StudentAvatar student={student} sizeClass="w-11 h-11" />
+            <div className="min-w-0">
+              <div className="font-bold text-slate-800 text-sm truncate">{student.name}</div>
+              <div className="text-xs text-slate-500">
+                NIS: {student.nis} {student.nisn ? `| NISN: ${student.nisn}` : ''}
+              </div>
+              <div className="text-xs text-slate-500">
+                Kelas: {student.class} | Absen: {student.absenNumber || '-'} | Status: {getStudentStatus(student)}
+              </div>
             </div>
           </div>
           <p className="mt-2 text-rose-600 text-xs font-semibold">
@@ -758,6 +842,7 @@ const StudentList: React.FC<StudentListProps> = ({
 
   const triggerBulkDelete = () => {
     if (selectedIds.length === 0) return;
+    const selectedStudentsPreview = students.filter((s) => selectedIds.includes(s.id));
     setConfirmModal({
       isOpen: true,
       title: 'Hapus Siswa Terpilih',
@@ -766,6 +851,19 @@ const StudentList: React.FC<StudentListProps> = ({
           <p>
             Apakah Anda yakin ingin menghapus <strong className="text-rose-600">{selectedIds.length} data siswa</strong> yang telah dipilih?
           </p>
+          {selectedStudentsPreview.length > 0 && (
+            <div className="mt-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex flex-wrap gap-1.5">
+              {selectedStudentsPreview.slice(0, 4).map((stu) => (
+                <div key={stu.id} className="inline-flex items-center gap-1.5 bg-white px-2 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700">
+                  <StudentAvatar student={stu} sizeClass="w-5 h-5" />
+                  <span>{stu.name}</span>
+                </div>
+              ))}
+              {selectedStudentsPreview.length > 4 && (
+                <span className="text-xs text-slate-500 self-center px-1">+{selectedStudentsPreview.length - 4} siswa lain</span>
+              )}
+            </div>
+          )}
           <p className="mt-2 text-slate-500 text-xs">
             Seluruh data siswa terpilih beserta akumulasi poin akan dihapus secara permanen dari sistem.
           </p>
@@ -856,7 +954,7 @@ const StudentList: React.FC<StudentListProps> = ({
     <>
       {/* KOP SURAT (Only Visible on Print) */}
       <div className="hidden print:block p-8">
-        <KopSurat appConfig={appConfig} showBorder={true} />
+        <KopSurat appConfig={appConfig} showBorder={true} printSettings={draftPrintSettings} />
         <div className="text-center my-6">
           <h2 className="text-2xl font-black uppercase">
             DATA DIREKTORI SISWA {filterClass ? `KELAS ${filterClass}` : ''}
@@ -867,10 +965,10 @@ const StudentList: React.FC<StudentListProps> = ({
 
       <div className="bg-white rounded-2xl shadow-xl border border-emerald-100 overflow-hidden print:shadow-none print:border-none">
         {/* Header & Action Bar */}
-        <div className="p-6 border-b border-emerald-100 space-y-4 bg-gradient-to-r from-emerald-50/90 via-teal-50/40 to-white print:hidden">
-          <div className="flex justify-between items-center flex-wrap gap-4">
+        <div className="p-4 sm:p-6 border-b border-emerald-100 space-y-3.5 sm:space-y-4 bg-gradient-to-r from-emerald-50/90 via-teal-50/40 to-white print:hidden">
+          <div className="flex flex-col xl:flex-row xl:justify-between xl:items-center gap-3.5">
             <div className="flex items-center gap-3 flex-wrap">
-              <h4 className="font-bold text-lg text-emerald-950 flex items-center gap-2.5 flex-wrap">
+              <h4 className="font-bold text-base sm:text-lg text-emerald-950 flex items-center gap-2 flex-wrap">
                 <span className="bg-emerald-100 p-2 rounded-xl border border-emerald-200/60">
                   <UserIcon className="w-5 h-5 text-emerald-700" />
                 </span>
@@ -893,13 +991,13 @@ const StudentList: React.FC<StudentListProps> = ({
               )}
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="grid grid-cols-2 sm:flex sm:items-center sm:flex-wrap gap-2 w-full xl:w-auto">
               {/* Menu Hapus Data Siswa */}
               <div className="relative">
                 <button
                   type="button"
                   onClick={() => setShowDeleteMenu(!showDeleteMenu)}
-                  className="flex items-center gap-1.5 bg-white text-rose-600 px-3 py-2 rounded-xl text-xs font-bold hover:bg-rose-50 transition border border-rose-200 shadow-xs cursor-pointer"
+                  className="w-full sm:w-auto flex items-center justify-center gap-1.5 bg-white text-rose-600 px-3 py-2 rounded-xl text-xs font-bold hover:bg-rose-50 transition border border-rose-200 shadow-xs cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5 text-rose-500" />
                   <span>Hapus</span>
@@ -908,7 +1006,7 @@ const StudentList: React.FC<StudentListProps> = ({
 
                 {showDeleteMenu && (
                   <div
-                    className="absolute right-0 mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-1.5 z-30 animate-in fade-in zoom-in-95 duration-100"
+                    className="absolute left-0 sm:left-auto sm:right-0 mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-1.5 z-30 animate-in fade-in zoom-in-95 duration-100"
                     onClick={() => setShowDeleteMenu(false)}
                   >
                     <button
@@ -943,53 +1041,65 @@ const StudentList: React.FC<StudentListProps> = ({
 
               <button
                 onClick={handleExportExcel}
-                className="flex items-center gap-1.5 bg-white text-teal-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-teal-50 transition border border-teal-200 shadow-xs cursor-pointer"
+                className="flex items-center justify-center gap-1.5 bg-white text-teal-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-teal-50 transition border border-teal-200 shadow-xs cursor-pointer"
                 title="Unduh data siswa lengkap ke Excel (.xls)"
               >
-                <FileSpreadsheet className="w-3.5 h-3.5" /> Unduh XLS
+                <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" /> Unduh XLS
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPrePrintPanel((v) => !v)}
+                className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition border shadow-xs cursor-pointer ${
+                  showPrePrintPanel
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+                }`}
+                title="Atur Kop Surat, Spasi, TTD & Font sebelum Pratinjau atau Cetak"
+              >
+                <Sliders className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">Atur Kop &amp; TTD</span>
               </button>
               <button
                 onClick={handleDirectDownloadPdf}
-                className="flex items-center gap-1.5 bg-white text-rose-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-rose-50 transition border border-rose-200 shadow-xs cursor-pointer"
+                className="flex items-center justify-center gap-1.5 bg-white text-rose-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-rose-50 transition border border-rose-200 shadow-xs cursor-pointer"
                 title="Unduh langsung data siswa dalam format PDF"
               >
-                <FileDown className="w-3.5 h-3.5" /> Unduh PDF
+                <FileDown className="w-3.5 h-3.5 shrink-0" /> Unduh PDF
               </button>
               <button
                 onClick={handlePrint}
-                className="flex items-center gap-1.5 bg-white text-emerald-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-emerald-50 transition border border-emerald-200 shadow-xs cursor-pointer"
+                className="flex items-center justify-center gap-1.5 bg-white text-emerald-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-emerald-50 transition border border-emerald-200 shadow-xs cursor-pointer"
                 title="Pratinjau & Cetak PDF dengan Kop Surat"
               >
-                <Printer className="w-3.5 h-3.5" /> Cetak PDF
+                <Printer className="w-3.5 h-3.5 shrink-0" /> Cetak PDF
               </button>
               <button
                 onClick={() => {
                   setIsUploadMode(true);
                   setIsModalOpen(true);
                 }}
-                className="flex items-center gap-1.5 bg-white text-emerald-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-emerald-50 transition border border-emerald-200 shadow-xs cursor-pointer"
+                className="flex items-center justify-center gap-1.5 bg-white text-emerald-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-emerald-50 transition border border-emerald-200 shadow-xs cursor-pointer"
               >
-                <UploadIcon className="w-3.5 h-3.5" /> Import Excel
+                <UploadIcon className="w-3.5 h-3.5 shrink-0" /> Import Excel
               </button>
               <button
                 onClick={openAddModal}
-                className="flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:from-emerald-700 hover:to-teal-700 transition shadow-md shadow-emerald-200 cursor-pointer"
+                className="col-span-2 sm:col-span-1 flex items-center justify-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:from-emerald-700 hover:to-teal-700 transition shadow-md shadow-emerald-200 cursor-pointer"
               >
-                <UserPlus className="w-4 h-4" /> Tambah Siswa
+                <UserPlus className="w-4 h-4 shrink-0" /> Tambah Siswa
               </button>
             </div>
           </div>
 
           {/* Search & Filter Row */}
-          <div className="flex flex-wrap items-center gap-2.5 pt-1">
-            <div className="relative flex-1 min-w-[220px]">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 pt-1">
+            <div className="relative w-full sm:flex-1 sm:min-w-[220px]">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari nama, NIS, NISN, email, alamat, atau no. HP..."
-                className="w-full pl-9 pr-8 py-2 text-xs font-medium bg-white border border-emerald-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800"
+                placeholder="Cari nama, NIS, NISN, wali kelas, guru BK, email, alamat..."
+                className="w-full pl-9 pr-8 py-2.5 sm:py-2 text-xs font-medium bg-white border border-emerald-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800"
               />
               {searchQuery && (
                 <button
@@ -1008,7 +1118,7 @@ const StudentList: React.FC<StudentListProps> = ({
                 setFilterClass(e.target.value);
                 setSelectedIds([]);
               }}
-              className="text-xs font-bold bg-white border border-emerald-200 text-emerald-800 px-3 py-2 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+              className="flex-1 sm:flex-none text-xs font-bold bg-white border border-emerald-200 text-emerald-800 px-3 py-2.5 sm:py-2 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
             >
               <option value="">Semua Kelas</option>
               {classOptions.map((c) => (
@@ -1024,7 +1134,7 @@ const StudentList: React.FC<StudentListProps> = ({
                 setFilterStatus(e.target.value);
                 setSelectedIds([]);
               }}
-              className="text-xs font-bold bg-white border border-emerald-200 text-slate-700 px-3 py-2 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+              className="flex-1 sm:flex-none text-xs font-bold bg-white border border-emerald-200 text-slate-700 px-3 py-2.5 sm:py-2 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
             >
               <option value="">Semua Status</option>
               {STUDENT_STATUS_OPTIONS.map((st) => (
@@ -1071,6 +1181,69 @@ const StudentList: React.FC<StudentListProps> = ({
           </div>
         </div>
 
+        {/* Inline Pre-Print Kop, Spasi & TTD Settings Panel */}
+        {showPrePrintPanel && (
+          <div className="border-b border-indigo-100 bg-slate-50/80 p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 print:hidden">
+            <div className="lg:col-span-5">
+              <PrintSettingsPanel
+                settings={draftPrintSettings}
+                onChange={setDraftPrintSettings}
+                appConfig={appConfig}
+                currentUser={currentUser}
+                users={users}
+                onSaveDefaultSettings={onSavePrintSettings}
+                showFooterActions
+                className="rounded-2xl border border-slate-200 max-h-[500px]"
+              />
+            </div>
+            <div className="lg:col-span-7 flex flex-col justify-between gap-3">
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs overflow-x-auto space-y-4">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-700">
+                    Pratinjau Kop Surat &amp; TTD Sebelum Cetak Data Siswa
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                    Spasi: {(draftPrintSettings.kopStyle.lineSpacing ?? 1).toFixed(1)}x • Bawah: {draftPrintSettings.kopStyle.bottomSpacing ?? 6} mm
+                  </span>
+                </div>
+                {draftPrintSettings.showKop ? (
+                  <div className="min-w-[480px] sm:min-w-0">
+                    <KopSurat appConfig={appConfig} printSettings={draftPrintSettings} showBorder />
+                  </div>
+                ) : (
+                  <div className="py-4 text-center text-xs text-slate-400 border border-dashed border-slate-300 rounded-xl">
+                    Kop Surat dinonaktifkan pada dokumen ini.
+                  </div>
+                )}
+                <SignatureLayoutEditor
+                  compact
+                  settings={draftPrintSettings}
+                  onChange={setDraftPrintSettings}
+                  appConfig={appConfig}
+                  currentUser={currentUser}
+                  usableWidthMm={267}
+                />
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleDirectDownloadPdf}
+                  className="px-3.5 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <FileDown className="w-3.5 h-3.5" /> Unduh PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Pratinjau Lengkap &amp; Cetak PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Organized Data Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
@@ -1086,7 +1259,7 @@ const StudentList: React.FC<StudentListProps> = ({
                 </th>
                 <th className="px-3 py-3.5 text-center w-16">Absen</th>
                 <th className="px-4 py-3.5 min-w-[240px]">Identitas Siswa (Foto, Nama, NIS / NISN)</th>
-                <th className="px-3 py-3.5 min-w-[110px]">Kelas &amp; JK</th>
+                <th className="px-3 py-3.5 min-w-[160px]">Kelas, JK &amp; Pembina</th>
                 <th className="px-3 py-3.5 min-w-[165px]">Tempat, Tgl Lahir</th>
                 <th className="px-4 py-3.5 min-w-[230px]">Kontak (No. HP, Email) &amp; Alamat</th>
                 <th className="px-3 py-3.5 min-w-[155px]">Status &amp; Poin</th>
@@ -1193,7 +1366,7 @@ const StudentList: React.FC<StudentListProps> = ({
                       </button>
                     </td>
 
-                    {/* Kelas & Jenis Kelamin */}
+                    {/* Kelas, Jenis Kelamin & Pembina */}
                     <td className="px-3 py-3.5">
                       <div className="flex flex-col gap-1.5 items-start">
                         <span className="bg-slate-100 text-slate-800 px-2.5 py-0.5 rounded-md font-bold text-xs border border-slate-200/80">
@@ -1208,6 +1381,20 @@ const StudentList: React.FC<StudentListProps> = ({
                         >
                           {student.gender === 'L' ? 'L (Laki-laki)' : 'P (Perempuan)'}
                         </span>
+                        {(student.waliKelas || student.guruBk) && (
+                          <div className="text-[11px] text-slate-600 space-y-0.5 pt-0.5">
+                            {student.waliKelas && (
+                              <div className="truncate max-w-[180px]" title={`Wali Kelas: ${student.waliKelas}`}>
+                                <span className="font-bold text-slate-700">Wali:</span> {student.waliKelas}
+                              </div>
+                            )}
+                            {student.guruBk && (
+                              <div className="truncate max-w-[180px]" title={`Guru BK: ${student.guruBk}`}>
+                                <span className="font-bold text-indigo-700">BK:</span> {student.guruBk}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </td>
 
@@ -1425,7 +1612,7 @@ const StudentList: React.FC<StudentListProps> = ({
                   </div>
                   <p className="text-[11px] text-slate-500 mt-2.5 leading-relaxed">
                     <strong>Kolom yang didukung (otomatis terdeteksi):</strong>{' '}
-                    NIS, NISN, Nama, Kelas, No Absen, Tempat, Tanggal Lahir, Email, Foto, ALAMAT, NO_HP, JENIS_KELAMIN, Status.
+                    NIS, NISN, Nama, Kelas, No Absen, Tempat, Tanggal Lahir, Email, Foto, ALAMAT, NO_HP, JENIS_KELAMIN, Status, Wali Kelas, Guru BK.
                   </p>
                 </div>
 
@@ -1434,7 +1621,7 @@ const StudentList: React.FC<StudentListProps> = ({
                     onClick={handleDownloadTemplate}
                     className="w-full flex items-center justify-center gap-2 text-xs font-bold text-emerald-700 bg-white border border-emerald-200 py-3 rounded-xl hover:bg-emerald-50 transition shadow-xs cursor-pointer"
                   >
-                    <FileDown className="w-4 h-4" /> Unduh Template Excel Lengkap (13 Kolom)
+                    <FileDown className="w-4 h-4" /> Unduh Template Excel Lengkap (15 Kolom)
                   </button>
                 </div>
               </div>
@@ -1592,6 +1779,35 @@ const StudentList: React.FC<StudentListProps> = ({
                       </select>
                     </div>
                   </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-3.5">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 mb-1">Wali Kelas</label>
+                      <input
+                        type="text"
+                        list="teacher-advisor-suggestions"
+                        value={waliKelas}
+                        onChange={(e) => setWaliKelas(e.target.value)}
+                        className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900"
+                        placeholder="Pilih atau ketik nama Wali Kelas"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 mb-1">Guru BK</label>
+                      <input
+                        type="text"
+                        list="teacher-advisor-suggestions"
+                        value={guruBk}
+                        onChange={(e) => setGuruBk(e.target.value)}
+                        className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900"
+                        placeholder="Pilih atau ketik nama Guru BK"
+                      />
+                    </div>
+                    <datalist id="teacher-advisor-suggestions">
+                      {teacherSuggestions.map((tName) => (
+                        <option key={tName} value={tName} />
+                      ))}
+                    </datalist>
+                  </div>
                 </div>
 
                 {/* Kelahiran & Kontak */}
@@ -1674,7 +1890,6 @@ const StudentList: React.FC<StudentListProps> = ({
         </div>
       )}
 
-      {/* PDF Preview Modal */}
       {/* Unified Print Settings & Preview Modal */}
       <PrintPreviewModal
         isOpen={isPrintModalOpen}
@@ -1686,6 +1901,8 @@ const StudentList: React.FC<StudentListProps> = ({
         onClose={() => setIsPrintModalOpen(false)}
         buildPdfDoc={buildStudentPdfDoc}
         onSaveDefaultSettings={onSavePrintSettings}
+        defaultOverrides={draftPrintSettings}
+        onSettingsChange={setDraftPrintSettings}
       />
 
       {/* Delete By Class Modal */}

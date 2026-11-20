@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { toast } from 'sonner';
 import { ViolationRecord, Student, ViolationCategory, AppTheme, AppConfig, User, UserActivityLog, UserRole, PrintDocumentSettings } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { FileSpreadsheet, Trash2, Printer, Filter, X, Image as ImageIcon, ExternalLink, AlertCircle, TrendingUp, Users, AlertTriangle, List, User as UserIcon, School, Calendar, ArrowDownCircle, Bell, BellRing, Clock, FileText, Volume2, ShieldAlert, Activity, ChevronRight, ShieldCheck, FileDown } from 'lucide-react';
+import { FileSpreadsheet, Trash2, Printer, Filter, X, Image as ImageIcon, ExternalLink, AlertCircle, TrendingUp, Users, AlertTriangle, List, User as UserIcon, School, Calendar, ArrowDownCircle, Bell, BellRing, Clock, FileText, Volume2, ShieldAlert, Activity, ChevronRight, ShieldCheck, FileDown, Sliders } from 'lucide-react';
 import { CLASS_LIST } from '../constants';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -12,10 +12,14 @@ import { UserActivityHistory } from './UserActivityHistory';
 import { formatRelativeTime, getActionLabel } from '../utils/activityLogger';
 import ConfirmModal from './ConfirmModal';
 import { KopSurat } from './KopSurat';
-import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import { SignatureLayoutEditor } from './SignatureLayoutEditor';
+import { drawPdfKopSurat, drawPdfSignatures, getPdfFontFamily, resolvePrintSettings } from '../utils/pdfKop';
 import PrintPreviewModal from './PrintPreviewModal';
+import PrintSettingsPanel from './PrintSettingsPanel';
 import { exportRowsToSpreadsheet } from '../utils/exportHelpers';
 import { getDefaultUserAvatar, getUserAvatar } from '../utils/avatarHelpers';
+import { loadStudentPdfPhoto, PdfImageAsset } from '../utils/pdfImages';
+import { StudentAvatar } from './StudentAvatar';
 
 interface DashboardProps {
   violations: ViolationRecord[];
@@ -61,11 +65,22 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [filterCategory, setFilterCategory] = useState('');
   const [filterStudentName, setFilterStudentName] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
-  const [reportToDelete, setReportToDelete] = useState<{ id: string; studentName: string; violationName: string } | null>(null);
+  const [reportToDelete, setReportToDelete] = useState<{ id: string; studentId?: string; studentName: string; violationName: string } | null>(null);
 
   // Tardiness Monitoring State
   const [showTardinessSection, setShowTardinessSection] = useState(false);
   const [tardinessFilterOnlyAlarm, setTardinessFilterOnlyAlarm] = useState(false);
+
+  // Pre-Print Configuration State (Kop, Spasi, TTD & Font before Pratinjau & Cetak)
+  const [showPrePrintPanel, setShowPrePrintPanel] = useState(false);
+  const [showTardinessPrePrintPanel, setShowTardinessPrePrintPanel] = useState(false);
+  const [draftPrintSettings, setDraftPrintSettings] = useState<PrintDocumentSettings>(() =>
+    resolvePrintSettings(appConfig, currentUser, users)
+  );
+
+  useEffect(() => {
+    setDraftPrintSettings(resolvePrintSettings(appConfig, currentUser, users));
+  }, [appConfig, currentUser, users]);
 
   // Compute all students tardiness summary
   const allTardiness = useMemo(() => {
@@ -227,8 +242,7 @@ const Dashboard: React.FC<DashboardProps> = ({
     }
     try {
       toast.info("Mengunduh PDF Rekapitulasi Keterlambatan...");
-      const settings = resolvePrintSettings(appConfig, currentUser, users);
-      const doc = await buildAllTardinessRecapPdfDoc(allTardiness, appConfig, currentUser, settings);
+      const doc = await buildAllTardinessRecapPdfDoc(allTardiness, appConfig, currentUser, draftPrintSettings, students);
       doc.save(`Rekap_Keterlambatan_${new Date().toISOString().split('T')[0]}.pdf`);
       toast.success("PDF Rekapitulasi Keterlambatan berhasil diunduh.");
     } catch (e) {
@@ -262,12 +276,12 @@ const Dashboard: React.FC<DashboardProps> = ({
     setPrintModalMode({ type: 'tardinessRecap' });
   };
 
-  const defaultShowPoints = appConfig.printSettings?.showPoints !== false;
+  const defaultShowPoints = draftPrintSettings.showPoints !== false;
 
   const buildRecapPdfDoc = async (customSettings?: PrintDocumentSettings) => {
-    const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
+    const settings = customSettings || draftPrintSettings;
     const showPoints = settings.showPoints !== false;
-    const font = settings.documentFontFamily || 'helvetica';
+    const font = getPdfFontFamily(settings.documentFontFamily);
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     
@@ -292,66 +306,143 @@ const Dashboard: React.FC<DashboardProps> = ({
     // Individual Data
     let tableStartY = currentY + 18;
     if (recapMode === 'student' && selectedStudentData) {
+      const selectedPhoto = await loadStudentPdfPhoto(selectedStudentData);
       doc.setFontSize(10);
       doc.setFont(font, 'bold');
       doc.text("BIODATA SISWA", 15, tableStartY);
+
+      const bioX = selectedPhoto ? 39 : 15;
+      if (selectedPhoto) {
+        const photoX = 15;
+        const photoY = tableStartY + 3.5;
+        const photoW = 19;
+        const photoH = 24;
+        try {
+          doc.setFillColor(248, 250, 252);
+          doc.rect(photoX - 0.5, photoY - 0.5, photoW + 1, photoH + 1, 'F');
+          doc.addImage(selectedPhoto.dataUrl, selectedPhoto.format, photoX, photoY, photoW, photoH);
+          doc.setDrawColor(203, 213, 225);
+          doc.rect(photoX - 0.5, photoY - 0.5, photoW + 1, photoH + 1, 'S');
+        } catch {
+          // ignore
+        }
+      }
+
+      const bioMaxW = pageWidth - bioX - (showPoints ? 50 : 15);
       doc.setFont(font, 'normal');
       doc.setFontSize(9);
-      doc.text(`Nama Lengkap : ${selectedStudentData.name}`, 15, tableStartY + 6);
-      doc.text(`NIS / NISN    : ${selectedStudentData.nis} / ${selectedStudentData.nisn || '-'}`, 15, tableStartY + 11);
-      doc.text(`Kelas / Absen : ${selectedStudentData.class} (No. Absen: ${selectedStudentData.absenNumber || '-'}) | Status: ${selectedStudentData.status || 'Aktif'}`, 15, tableStartY + 16);
+      doc.text(`Nama Lengkap  : ${selectedStudentData.name}`, bioX, tableStartY + 7, { maxWidth: bioMaxW });
+      doc.text(`NIS / NISN    : ${selectedStudentData.nis} / ${selectedStudentData.nisn || '-'}`, bioX, tableStartY + 12, { maxWidth: bioMaxW });
+      doc.text(`Kelas / Absen : ${selectedStudentData.class} (No. Absen: ${selectedStudentData.absenNumber || '-'}) | Status: ${selectedStudentData.status || 'Aktif'}`, bioX, tableStartY + 17, { maxWidth: pageWidth - bioX - 15 });
+      doc.text(`Wali Kelas    : ${selectedStudentData.waliKelas || '-'} | Guru BK: ${selectedStudentData.guruBk || '-'}`, bioX, tableStartY + 22, { maxWidth: pageWidth - bioX - 15 });
       
       if (showPoints) {
         doc.setFont(font, 'bold');
-        doc.text(`TOTAL POIN : ${selectedStudentData.totalPoints}`, pageWidth - 15, tableStartY + 6, { align: 'right' });
+        doc.text(`TOTAL POIN : ${selectedStudentData.totalPoints}`, pageWidth - 15, tableStartY + 7, { align: 'right' });
       }
       
-      tableStartY += 25;
+      tableStartY += 32;
     }
 
-    // Table
-    const headers = showPoints
-      ? ["Tanggal", "Siswa", "Kelas", "Kategori & Deskripsi", "Poin"]
-      : ["Tanggal", "Siswa", "Kelas", "Kategori & Deskripsi"];
-    const body = filteredViolations.map(v => {
-      const row: any[] = [
-        new Date(v.date).toLocaleDateString('id-ID'),
-        v.studentName,
-        v.studentClass,
-        `${v.category}\n${v.description}`,
-      ];
-      if (showPoints) {
-        row.push(v.points > 0 ? `+${v.points}` : v.points);
-      }
-      return row;
-    });
-
-    const columnStyles: Record<number, any> = {
-      0: { cellWidth: 25, halign: 'center' },
-      1: { cellWidth: recapMode === 'student' ? 0.1 : 40 },
-      2: { cellWidth: recapMode === 'student' ? 0.1 : 20, halign: 'center' },
-      3: { cellWidth: 'auto' },
-    };
-    if (showPoints) {
-      columnStyles[4] = { cellWidth: 15, halign: 'center', fontStyle: 'bold' };
-    }
-
-    autoTable(doc, {
-      startY: tableStartY,
-      head: [headers],
-      body: body,
-      theme: 'grid',
-      styles: { font, fontSize: 8, cellPadding: 3 },
-      headStyles: { font, fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold', halign: 'center' },
-      columnStyles,
-      didParseCell: (data) => {
-        if (recapMode === 'student' && (data.column.index === 1 || data.column.index === 2)) {
-          data.cell.styles.fontSize = 0.1;
-          data.cell.styles.cellPadding = 0;
-          data.cell.contentWidth = 0;
+    if (recapMode === 'student') {
+      const headers = showPoints
+        ? ["Tanggal", "Kategori & Deskripsi", "Poin"]
+        : ["Tanggal", "Kategori & Deskripsi"];
+      const body = filteredViolations.map(v => {
+        const row: any[] = [
+          new Date(v.date).toLocaleDateString('id-ID'),
+          `${v.category}\n${v.description}`,
+        ];
+        if (showPoints) {
+          row.push(v.points > 0 ? `+${v.points}` : v.points);
         }
-      },
-    });
+        return row;
+      });
+      const columnStyles: Record<number, any> = {
+        0: { cellWidth: 25, halign: 'center' },
+        1: { cellWidth: 'auto' },
+      };
+      if (showPoints) {
+        columnStyles[2] = { cellWidth: 16, halign: 'center', fontStyle: 'bold' };
+      }
+
+      autoTable(doc, {
+        startY: tableStartY,
+        head: [headers],
+        body,
+        theme: 'grid',
+        styles: { font, fontSize: 8, cellPadding: 3 },
+        headStyles: { font, fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold', halign: 'center' },
+        columnStyles,
+      });
+    } else {
+      const studentMap = new Map<string, Student>();
+      students.forEach(s => studentMap.set(s.id, s));
+      const photoMap = new Map<string, PdfImageAsset | null>();
+      await Promise.all(
+        filteredViolations.map(async (v) => {
+          if (!photoMap.has(v.studentId)) {
+            const stu = studentMap.get(v.studentId);
+            const asset = await loadStudentPdfPhoto(stu || { gender: 'L' });
+            photoMap.set(v.studentId, asset);
+          }
+        })
+      );
+
+      const headers = showPoints
+        ? ["Tanggal", "Foto", "Siswa", "Kelas", "Kategori & Deskripsi", "Poin"]
+        : ["Tanggal", "Foto", "Siswa", "Kelas", "Kategori & Deskripsi"];
+      const body = filteredViolations.map(v => {
+        const row: any[] = [
+          new Date(v.date).toLocaleDateString('id-ID'),
+          '',
+          v.studentName,
+          v.studentClass,
+          `${v.category}\n${v.description}`,
+        ];
+        if (showPoints) {
+          row.push(v.points > 0 ? `+${v.points}` : v.points);
+        }
+        return row;
+      });
+
+      const columnStyles: Record<number, any> = {
+        0: { cellWidth: 22, halign: 'center' },
+        1: { cellWidth: 15, halign: 'center' },
+        2: { cellWidth: 34, fontStyle: 'bold' },
+        3: { cellWidth: 18, halign: 'center' },
+        4: { cellWidth: 'auto' },
+      };
+      if (showPoints) {
+        columnStyles[5] = { cellWidth: 14, halign: 'center', fontStyle: 'bold' };
+      }
+
+      autoTable(doc, {
+        startY: tableStartY,
+        head: [headers],
+        body,
+        theme: 'grid',
+        styles: { font, fontSize: 8, cellPadding: 2, valign: 'middle', minCellHeight: 16 },
+        headStyles: { font, fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold', halign: 'center', minCellHeight: 8 },
+        columnStyles,
+        didDrawCell: (data) => {
+          if (data.section !== 'body' || data.column.index !== 1) return;
+          const v = filteredViolations[data.row.index];
+          if (!v) return;
+          const asset = photoMap.get(v.studentId);
+          if (!asset) return;
+          const boxW = Math.min(10, data.cell.width - 3);
+          const boxH = Math.min(13, data.cell.height - 2.5);
+          const x = data.cell.x + (data.cell.width - boxW) / 2;
+          const y = data.cell.y + (data.cell.height - boxH) / 2;
+          try {
+            doc.addImage(asset.dataUrl, asset.format, x, y, boxW, boxH);
+          } catch {
+            // ignore
+          }
+        },
+      });
+    }
 
     // Footer / Signatures
     const finalY = (doc as any).lastAutoTable.finalY + 14;
@@ -370,8 +461,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       return;
     }
     try {
-      const settings = resolvePrintSettings(appConfig, currentUser, users);
-      const doc = await buildRecapPdfDoc(settings);
+      const doc = await buildRecapPdfDoc(draftPrintSettings);
       doc.save(`SIPERSIS_Rekap_${recapMode}_${new Date().toISOString().split('T')[0]}.pdf`);
       toast.success("PDF rekapitulasi berhasil diunduh.");
     } catch (error) {
@@ -414,9 +504,11 @@ const Dashboard: React.FC<DashboardProps> = ({
   return (
     <div className="space-y-6 print:space-y-4 print:w-full">
       {/* KOP SURAT (Only Visible on Print) */}
-      <div className="hidden print:block p-8">
-        <KopSurat appConfig={appConfig} showBorder={true} />
-      </div>
+      {draftPrintSettings.showKop && (
+        <div className="hidden print:block p-8">
+          <KopSurat appConfig={appConfig} printSettings={draftPrintSettings} showBorder={true} />
+        </div>
+      )}
 
       {/* ALARM KETERLAMBATAN BANNER (Hidden on Print) */}
       {alarmTardiness.length > 0 && (
@@ -462,31 +554,31 @@ const Dashboard: React.FC<DashboardProps> = ({
 
       {/* ADMIN DASHBOARD VIEW TOGGLE (Only for Admin) */}
       {currentUser.role === UserRole.ADMIN && (
-        <div className="bg-white p-2.5 rounded-2xl shadow-sm border border-slate-200/90 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 print:hidden">
-          <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+        <div className="bg-white p-2.5 rounded-2xl shadow-sm border border-slate-200/90 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 print:hidden">
+          <div className="grid grid-cols-2 sm:flex items-center gap-1.5 sm:gap-2 bg-slate-100 p-1 rounded-xl">
             <button
               onClick={() => setDashboardSubTab('overview')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all ${
+              className={`flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs font-bold transition-all ${
                 dashboardSubTab === 'overview'
                   ? 'bg-white text-slate-900 shadow-sm'
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >
-              <TrendingUp className="w-4 h-4 text-blue-600" />
-              Statistik & Rekap Siswa
+              <TrendingUp className="w-4 h-4 text-blue-600 shrink-0" />
+              <span className="truncate">Statistik &amp; Rekap</span>
             </button>
             <button
               onClick={() => setDashboardSubTab('activities')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all ${
+              className={`flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs font-bold transition-all ${
                 dashboardSubTab === 'activities'
                   ? 'bg-purple-600 text-white shadow-sm shadow-purple-200'
                   : 'text-slate-500 hover:text-purple-700'
               }`}
             >
-              <Activity className="w-4 h-4" />
-              Riwayat Aktivitas User
+              <Activity className="w-4 h-4 shrink-0" />
+              <span className="truncate">Log Aktivitas</span>
               {activities.length > 0 && (
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-black ${
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-black shrink-0 ${
                   dashboardSubTab === 'activities' ? 'bg-white/20 text-white' : 'bg-purple-100 text-purple-800'
                 }`}>
                   {activities.length}
@@ -521,16 +613,16 @@ const Dashboard: React.FC<DashboardProps> = ({
       ) : (
         <>
       {/* FILTER & MODE SELECTION (Hidden on Print) */}
-      <div className={`bg-white p-6 rounded-2xl shadow-lg border ${theme.sidebar} print:hidden`}>
+      <div className={`bg-white p-4 sm:p-6 rounded-2xl shadow-lg border ${theme.sidebar} print:hidden`}>
         {/* Mode Selector Tabs */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
-          <div className="flex items-center gap-2">
-            <div className={`p-2 bg-gradient-to-br ${theme.gradient} rounded-lg shadow-sm`}>
+        <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center mb-5 sm:mb-6 gap-3.5 sm:gap-4">
+          <div className="flex items-center gap-2.5">
+            <div className={`p-2 bg-gradient-to-br ${theme.gradient} rounded-lg shadow-sm shrink-0`}>
                <Filter className="w-5 h-5 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h4 className="font-bold text-slate-800 text-lg">Filter & Format Data</h4>
+                <h4 className="font-bold text-slate-800 text-base sm:text-lg">Filter &amp; Format Data</h4>
                 <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
                   TA {appConfig.academicYear}
                 </span>
@@ -539,30 +631,30 @@ const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </div>
           
-          <div className="flex bg-slate-100 p-1 rounded-xl">
+          <div className="w-full lg:w-auto grid grid-cols-3 lg:flex bg-slate-100 p-1 rounded-xl gap-1">
              <button 
                 onClick={() => handleModeChange('all')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${recapMode === 'all' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${recapMode === 'all' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
              >
-                <List className="w-4 h-4" /> Keseluruhan
+                <List className="w-4 h-4 shrink-0" /> <span className="truncate">Semua</span>
              </button>
              <button 
                 onClick={() => handleModeChange('class')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${recapMode === 'class' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${recapMode === 'class' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
              >
-                <School className="w-4 h-4" /> Per Kelas
+                <School className="w-4 h-4 shrink-0" /> <span className="truncate">Per Kelas</span>
              </button>
              <button 
                 onClick={() => handleModeChange('student')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${recapMode === 'student' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${recapMode === 'student' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
              >
-                <UserIcon className="w-4 h-4" /> Individu
+                <UserIcon className="w-4 h-4 shrink-0" /> <span className="truncate">Individu</span>
              </button>
           </div>
         </div>
 
         {/* Dynamic Filters based on Mode */}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
           <div>
              <label className="block text-xs font-bold text-blue-600 uppercase tracking-wide mb-1">Dari Tanggal</label>
              <div className="relative">
@@ -632,6 +724,19 @@ const Dashboard: React.FC<DashboardProps> = ({
                   <option key={s.id} value={s.name}>{s.class} - {s.nis}</option>
                 ))}
              </datalist>
+             {filterStudentName.trim() && (() => {
+               const matched = selectedStudentData || students.find(s => s.name.toLowerCase().includes(filterStudentName.trim().toLowerCase()));
+               if (!matched) return null;
+               return (
+                 <div className="mt-2 flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-blue-50 border border-blue-200">
+                   <StudentAvatar student={matched} sizeClass="w-6 h-6" />
+                   <div className="min-w-0 leading-tight">
+                     <div className="text-[11px] font-bold text-blue-900 truncate">{matched.name}</div>
+                     <div className="text-[10px] text-blue-600">{matched.class} • NIS {matched.nis}</div>
+                   </div>
+                 </div>
+               );
+             })()}
           </div>
         </div>
         
@@ -646,8 +751,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       {/* Stats Cards - Hidden on Print */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6 print:hidden">
-        <div className={`bg-gradient-to-br ${theme.gradient} p-6 rounded-2xl shadow-xl text-white relative overflow-hidden group hover:scale-[1.02] transition-transform`}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6 print:hidden">
+        <div className={`bg-gradient-to-br ${theme.gradient} p-5 sm:p-6 rounded-2xl shadow-xl text-white relative overflow-hidden group hover:scale-[1.02] transition-transform`}>
           <div className="absolute top-0 right-0 p-4 opacity-10">
              <FileSpreadsheet className="w-24 h-24" />
           </div>
@@ -784,7 +889,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
       {/* RIWAYAT SISWA SERING TERLAMBAT & SISTEM ALARM (Hidden on Print) */}
       <div id="tardiness-section" className="bg-white rounded-2xl shadow-xl border border-rose-100 overflow-hidden print:hidden transition-all">
-        <div className="p-6 border-b border-rose-100 bg-gradient-to-r from-rose-50 via-red-50/50 to-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div className="p-4 sm:p-6 border-b border-rose-100 bg-gradient-to-r from-rose-50 via-red-50/50 to-white flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
           <div className="flex items-center gap-3">
             <div className={`p-2.5 rounded-xl ${alarmTardiness.length > 0 ? 'bg-red-600 text-white animate-pulse shadow-md shadow-red-200' : 'bg-rose-100 text-rose-600'}`}>
               <BellRing className="w-6 h-6" />
@@ -826,6 +931,18 @@ const Dashboard: React.FC<DashboardProps> = ({
               <FileSpreadsheet className="w-3.5 h-3.5" /> Unduh XLS
             </button>
             <button
+              type="button"
+              onClick={() => setShowTardinessPrePrintPanel((v) => !v)}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all border shadow-sm flex items-center gap-1.5 cursor-pointer ${
+                showTardinessPrePrintPanel
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white text-indigo-700 hover:bg-indigo-50 border-indigo-200'
+              }`}
+              title="Atur Kop Surat, Spasi, TTD & Font sebelum Pratinjau atau Cetak"
+            >
+              <Sliders className="w-3.5 h-3.5" /> Atur Kop, Spasi &amp; TTD
+            </button>
+            <button
               onClick={handleDirectDownloadTardinessPdf}
               className="px-3.5 py-2 bg-white hover:bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
               title="Unduh langsung PDF Rekap Keterlambatan"
@@ -850,6 +967,68 @@ const Dashboard: React.FC<DashboardProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Inline Pre-Print Kop, Spasi & TTD Settings Panel (Tardiness) */}
+        {showTardinessPrePrintPanel && (
+          <div className="border-b border-indigo-100 bg-slate-50/80 p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 print:hidden">
+            <div className="lg:col-span-5">
+              <PrintSettingsPanel
+                settings={draftPrintSettings}
+                onChange={setDraftPrintSettings}
+                appConfig={appConfig}
+                currentUser={currentUser}
+                users={users}
+                onSaveDefaultSettings={onSavePrintSettings}
+                showFooterActions
+                className="rounded-2xl border border-slate-200 max-h-[500px]"
+              />
+            </div>
+            <div className="lg:col-span-7 flex flex-col justify-between gap-3">
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs overflow-x-auto space-y-4">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-700">
+                    Pratinjau Kop Surat &amp; TTD Sebelum Cetak Keterlambatan
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                    Spasi: {(draftPrintSettings.kopStyle.lineSpacing ?? 1).toFixed(1)}x • Bawah: {draftPrintSettings.kopStyle.bottomSpacing ?? 6} mm
+                  </span>
+                </div>
+                {draftPrintSettings.showKop ? (
+                  <div className="min-w-[480px] sm:min-w-0">
+                    <KopSurat appConfig={appConfig} printSettings={draftPrintSettings} showBorder />
+                  </div>
+                ) : (
+                  <div className="py-4 text-center text-xs text-slate-400 border border-dashed border-slate-300 rounded-xl">
+                    Kop Surat dinonaktifkan pada dokumen ini.
+                  </div>
+                )}
+                <SignatureLayoutEditor
+                  compact
+                  settings={draftPrintSettings}
+                  onChange={setDraftPrintSettings}
+                  appConfig={appConfig}
+                  currentUser={currentUser}
+                />
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleDirectDownloadTardinessPdf}
+                  className="px-3.5 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <FileDown className="w-3.5 h-3.5" /> Unduh PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintAllTardinessRecap}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Pratinjau Lengkap &amp; Cetak PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="p-6">
           {displayedTardiness.length === 0 ? (
@@ -897,8 +1076,9 @@ const Dashboard: React.FC<DashboardProps> = ({
                             onClick={() => {
                               if (student) onViewStudent(student);
                             }}
-                            className="flex items-center gap-2 hover:text-red-600 transition-colors text-left group"
+                            className="flex items-center gap-2.5 hover:text-red-600 transition-colors text-left group"
                           >
+                            <StudentAvatar student={student} name={item.studentName} sizeClass="w-8 h-8" />
                             <span>{item.studentName}</span>
                             <ExternalLink className="w-3 h-3 text-slate-300 group-hover:text-red-500 transition-opacity" />
                           </button>
@@ -986,47 +1166,123 @@ const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Table Section */}
       <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden print:shadow-none print:border-none">
-        <div className="p-6 border-b border-slate-100 flex justify-between items-center print:hidden bg-gradient-to-r from-slate-50 to-white">
-          <div className="flex items-center gap-2">
-            <h4 className="font-bold text-xl text-slate-800">Rekapitulasi Data</h4>
+        <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col lg:flex-row lg:justify-between lg:items-center gap-3.5 print:hidden bg-gradient-to-r from-slate-50 to-white">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h4 className="font-bold text-lg sm:text-xl text-slate-800">Rekapitulasi Data</h4>
             {recapMode !== 'all' && (
               <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-bold uppercase">
                 Mode: {recapMode === 'class' ? 'Per Kelas' : 'Individu'}
               </span>
             )}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 w-full lg:w-auto">
             {onNavigateTab && (
               <button 
                 onClick={() => onNavigateTab('evidence')}
-                className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 px-4 py-2 rounded-xl text-sm transition shadow-xs font-bold"
+                className="col-span-2 sm:col-span-1 flex items-center justify-center gap-2 bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 px-3.5 py-2 rounded-xl text-xs sm:text-sm transition shadow-xs font-bold"
                 title="Buka Galeri Bukti Foto untuk melihat dan mengunduh semua berkas bukti"
               >
-                <ImageIcon className="w-4 h-4 text-indigo-600" /> Unduh Bukti Foto ({violations.filter(v => v.evidenceUrl).length})
+                <ImageIcon className="w-4 h-4 text-indigo-600 shrink-0" /> <span className="truncate">Unduh Bukti Foto ({violations.filter(v => v.evidenceUrl).length})</span>
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setShowPrePrintPanel((v) => !v)}
+              className={`flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2 rounded-xl text-xs sm:text-sm transition shadow-sm font-bold cursor-pointer border ${
+                showPrePrintPanel
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-50'
+              }`}
+              title="Atur Kop Surat, Spasi, TTD & Font sebelum Pratinjau atau Cetak"
+            >
+              <Sliders className="w-4 h-4 shrink-0" /> <span className="truncate">Atur Kop &amp; TTD</span>
+            </button>
             <button 
               onClick={handlePrint}
-              className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-3.5 py-2 rounded-xl text-sm hover:bg-slate-50 transition shadow-sm font-bold cursor-pointer"
+              className="flex items-center justify-center gap-1.5 sm:gap-2 bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs sm:text-sm hover:bg-slate-50 transition shadow-sm font-bold cursor-pointer"
             >
-              <Printer className="w-4 h-4" /> Cetak PDF
+              <Printer className="w-4 h-4 shrink-0" /> Cetak PDF
             </button>
             <button 
               onClick={handleDirectDownloadPdf}
-              className="flex items-center gap-2 bg-rose-600 hover:bg-rose-700 text-white px-3.5 py-2 rounded-xl text-sm transition shadow-md font-bold cursor-pointer"
+              className="flex items-center justify-center gap-1.5 sm:gap-2 bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-xl text-xs sm:text-sm transition shadow-md font-bold cursor-pointer"
               title="Unduh langsung laporan rekapitulasi dalam format PDF"
             >
-              <FileDown className="w-4 h-4" /> Unduh PDF
+              <FileDown className="w-4 h-4 shrink-0" /> Unduh PDF
             </button>
             <button 
               onClick={handleDownloadExcel}
-              className={`flex items-center gap-2 bg-gradient-to-r ${theme.button} text-white px-4 py-2 rounded-xl text-sm transition shadow-md font-bold cursor-pointer`}
+              className={`flex items-center justify-center gap-1.5 sm:gap-2 bg-gradient-to-r ${theme.button} text-white px-3.5 py-2 rounded-xl text-xs sm:text-sm transition shadow-md font-bold cursor-pointer`}
               title="Unduh laporan rekapitulasi dalam format Excel (.xls)"
             >
-              <FileSpreadsheet className="w-4 h-4" /> Unduh XLS
+              <FileSpreadsheet className="w-4 h-4 shrink-0" /> Unduh XLS
             </button>
           </div>
         </div>
+
+        {/* Inline Pre-Print Kop, Spasi & TTD Settings Panel (Rekapitulasi) */}
+        {showPrePrintPanel && (
+          <div className="border-b border-indigo-100 bg-slate-50/80 p-3 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 print:hidden">
+            <div className="lg:col-span-5">
+              <PrintSettingsPanel
+                settings={draftPrintSettings}
+                onChange={setDraftPrintSettings}
+                appConfig={appConfig}
+                currentUser={currentUser}
+                users={users}
+                onSaveDefaultSettings={onSavePrintSettings}
+                showFooterActions
+                className="rounded-2xl border border-slate-200 max-h-[500px]"
+              />
+            </div>
+            <div className="lg:col-span-7 flex flex-col justify-between gap-3 min-w-0">
+              <div className="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4 shadow-2xs overflow-x-auto space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-700">
+                    Pratinjau Kop Surat &amp; TTD Sebelum Cetak Rekapitulasi
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                    Spasi: {(draftPrintSettings.kopStyle.lineSpacing ?? 1).toFixed(1)}x • Bawah: {draftPrintSettings.kopStyle.bottomSpacing ?? 6} mm
+                  </span>
+                </div>
+                {draftPrintSettings.showKop ? (
+                  <div className="overflow-x-auto pb-1">
+                    <div className="min-w-[480px] sm:min-w-0">
+                      <KopSurat appConfig={appConfig} printSettings={draftPrintSettings} showBorder />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-4 text-center text-xs text-slate-400 border border-dashed border-slate-300 rounded-xl">
+                    Kop Surat dinonaktifkan pada dokumen ini.
+                  </div>
+                )}
+                <SignatureLayoutEditor
+                  compact
+                  settings={draftPrintSettings}
+                  onChange={setDraftPrintSettings}
+                  appConfig={appConfig}
+                  currentUser={currentUser}
+                />
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleDirectDownloadPdf}
+                  className="px-3.5 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <FileDown className="w-3.5 h-3.5" /> Unduh PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Pratinjau Lengkap &amp; Cetak PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         
         {/* DYNAMIC PRINT HEADER BASED ON RECAP MODE */}
         <div className="hidden print:block p-4 mb-4">
@@ -1044,8 +1300,9 @@ const Dashboard: React.FC<DashboardProps> = ({
 
           {/* Sub-Header for Student Mode (Biodata Style) */}
           {recapMode === 'student' && selectedStudentData && (
-             <div className="mb-6 border-b border-dashed border-black pb-4">
-                <table className="w-full text-sm font-medium">
+             <div className="mb-6 border-b border-dashed border-black pb-4 flex items-start gap-4">
+                <StudentAvatar student={selectedStudentData} sizeClass="w-16 h-16" className="rounded-lg border-slate-400 shrink-0" />
+                <table className="w-full text-sm font-medium flex-1">
                    <tbody>
                       <tr>
                          <td className="w-32 py-1">Nama Lengkap</td>
@@ -1076,6 +1333,14 @@ const Dashboard: React.FC<DashboardProps> = ({
                          <td className="text-right">Status Siswa</td>
                          <td className="text-center">:</td>
                          <td className="text-right font-bold">{selectedStudentData.status || 'Aktif'}</td>
+                      </tr>
+                      <tr>
+                         <td className="py-1">Wali Kelas</td>
+                         <td>:</td>
+                         <td>{selectedStudentData.waliKelas || '-'}</td>
+                         <td className="text-right">Guru BK</td>
+                         <td className="text-center">:</td>
+                         <td className="text-right">{selectedStudentData.guruBk || '-'}</td>
                       </tr>
                    </tbody>
                 </table>
@@ -1126,10 +1391,11 @@ const Dashboard: React.FC<DashboardProps> = ({
                            const s = getStudentById(v.studentId);
                            if (s) onViewStudent(s);
                          }}
-                         className="flex items-center gap-1 hover:text-blue-600 hover:underline decoration-blue-300 underline-offset-4 transition-all text-left group/name"
+                         className="flex items-center gap-2.5 hover:text-blue-600 hover:underline decoration-blue-300 underline-offset-4 transition-all text-left group/name"
                          title="Lihat Riwayat Siswa"
                        >
-                         {v.studentName}
+                         <StudentAvatar student={getStudentById(v.studentId)} name={v.studentName} sizeClass="w-8 h-8" />
+                         <span>{v.studentName}</span>
                          <ExternalLink className="w-3 h-3 text-blue-400 opacity-0 group-hover/name:opacity-100 transition-opacity print:hidden" />
                        </button>
                     </td>
@@ -1199,7 +1465,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                     </td>
                     <td className="px-6 py-4 text-right print:hidden align-top">
                       <button 
-                        onClick={() => setReportToDelete({ id: v.id, studentName: v.studentName, violationName: v.violationName })} 
+                        onClick={() => setReportToDelete({ id: v.id, studentId: v.studentId, studentName: v.studentName, violationName: v.violationName })} 
                         className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer" 
                         title="Hapus Laporan"
                       >
@@ -1325,6 +1591,8 @@ const Dashboard: React.FC<DashboardProps> = ({
         users={users}
         onClose={() => setPrintModalMode(null)}
         onSaveDefaultSettings={onSavePrintSettings}
+        defaultOverrides={draftPrintSettings}
+        onSettingsChange={setDraftPrintSettings}
         buildPdfDoc={async (settings) => {
           if (printModalMode?.type === 'tardinessLetter') {
             return buildTardinessLetterPdfDoc(
@@ -1336,7 +1604,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             );
           }
           if (printModalMode?.type === 'tardinessRecap') {
-            return buildAllTardinessRecapPdfDoc(allTardiness, appConfig, currentUser, settings);
+            return buildAllTardinessRecapPdfDoc(allTardiness, appConfig, currentUser, settings, students);
           }
           return buildRecapPdfDoc(settings);
         }}
@@ -1418,9 +1686,16 @@ const Dashboard: React.FC<DashboardProps> = ({
           <div>
             <p className="mb-2">Apakah Anda yakin ingin menghapus catatan pelanggaran / apresiasi ini?</p>
             {reportToDelete && (
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-600">
-                <div><strong>Siswa:</strong> {reportToDelete.studentName}</div>
-                <div><strong>Pelanggaran/Kebaikan:</strong> {reportToDelete.violationName}</div>
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-600 flex items-center gap-2.5">
+                <StudentAvatar
+                  student={reportToDelete.studentId ? getStudentById(reportToDelete.studentId) : students.find(s => s.name === reportToDelete.studentName)}
+                  name={reportToDelete.studentName}
+                  sizeClass="w-9 h-9"
+                />
+                <div className="min-w-0">
+                  <div><strong>Siswa:</strong> {reportToDelete.studentName}</div>
+                  <div><strong>Pelanggaran/Kebaikan:</strong> {reportToDelete.violationName}</div>
+                </div>
               </div>
             )}
             <p className="mt-2 text-rose-600 text-xs font-semibold">Poin siswa akan dikalkulasi ulang secara otomatis dan tersinkronisasi ke database cloud.</p>

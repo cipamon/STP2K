@@ -8,6 +8,7 @@ import {
   AppTheme,
   AppConfig,
   KopSuratStyleConfig,
+  SignatureBlockLayout,
   SignatureStyleConfig,
   PrintDocumentSettings,
 } from './types';
@@ -21,6 +22,8 @@ export const LOGO_URL = DEFAULT_LOGO_URL;
 
 export const DEFAULT_KOP_STYLE: KopSuratStyleConfig = {
   fontFamily: 'helvetica',
+  lineSpacing: 1.0,
+  bottomSpacing: 6,
   line1: { fontSize: 10.5, bold: false, italic: false, underline: false, align: 'center' },
   line2: { fontSize: 12, bold: true, italic: false, underline: false, align: 'center' },
   line3: { fontSize: 14, bold: true, italic: false, underline: false, align: 'center' },
@@ -44,6 +47,20 @@ export const DEFAULT_SIGNATURE_STYLE: SignatureStyleConfig = {
   spacingHeight: 22,
 };
 
+export const DEFAULT_KEPSEK_LAYOUT: SignatureBlockLayout = {
+  xPercent: 0,
+  yOffsetMm: 0,
+  widthMm: 64,
+  heightMm: 22,
+};
+
+export const DEFAULT_STAFF_LAYOUT: SignatureBlockLayout = {
+  xPercent: 100,
+  yOffsetMm: 0,
+  widthMm: 64,
+  heightMm: 22,
+};
+
 export const DEFAULT_PRINT_SETTINGS: PrintDocumentSettings = {
   showKop: true,
   showPoints: true,
@@ -51,6 +68,8 @@ export const DEFAULT_PRINT_SETTINGS: PrintDocumentSettings = {
   showStaffSignature: true,
   kepsekPosition: 'left',
   staffPosition: 'right',
+  kepsekLayout: DEFAULT_KEPSEK_LAYOUT,
+  staffLayout: DEFAULT_STAFF_LAYOUT,
   kepsekTitle: 'Kepala Sekolah',
   staffUserId: 'CURRENT_USER',
   staffRoleTitle: 'Guru BK / Admin',

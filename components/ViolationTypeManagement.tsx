@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AppConfig, PrintDocumentSettings, User, UserRole, ViolationType, ViolationCategory } from '../types';
 import { DEFAULT_APP_CONFIG } from '../constants';
 import {
@@ -12,6 +12,7 @@ import {
   FileSpreadsheet,
   FileDown,
   Printer,
+  Sliders,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -19,7 +20,10 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import ConfirmModal from './ConfirmModal';
 import PrintPreviewModal from './PrintPreviewModal';
-import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import PrintSettingsPanel from './PrintSettingsPanel';
+import { KopSurat } from './KopSurat';
+import { SignatureLayoutEditor } from './SignatureLayoutEditor';
+import { drawPdfKopSurat, drawPdfSignatures, getPdfFontFamily, resolvePrintSettings } from '../utils/pdfKop';
 import { exportAoaToSpreadsheet, exportRowsToSpreadsheet } from '../utils/exportHelpers';
 
 interface ViolationTypeManagementProps {
@@ -65,6 +69,13 @@ const ViolationTypeManagement: React.FC<ViolationTypeManagementProps> = ({
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [selectedImportFile, setSelectedImportFile] = useState<File | null>(null);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [showPrePrintPanel, setShowPrePrintPanel] = useState(false);
+  const [draftPrintSettings, setDraftPrintSettings] = useState<PrintDocumentSettings>(() =>
+    resolvePrintSettings(effectiveAppConfig, effectiveCurrentUser, users)
+  );
+  useEffect(() => {
+    setDraftPrintSettings(resolvePrintSettings(effectiveAppConfig, effectiveCurrentUser, users));
+  }, [effectiveAppConfig, effectiveCurrentUser, users]);
   const [typeToDelete, setTypeToDelete] = useState<ViolationType | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -148,7 +159,7 @@ const ViolationTypeManagement: React.FC<ViolationTypeManagementProps> = ({
   const buildPdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(effectiveAppConfig, effectiveCurrentUser, users);
     const showPoints = settings.showPoints !== false;
-    const font = settings.documentFontFamily || 'helvetica';
+    const font = getPdfFontFamily(settings.documentFontFamily);
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     const currentY = await drawPdfKopSurat(doc, effectiveAppConfig, 8, settings);
@@ -205,8 +216,7 @@ const ViolationTypeManagement: React.FC<ViolationTypeManagementProps> = ({
       return;
     }
     try {
-      const settings = resolvePrintSettings(effectiveAppConfig, effectiveCurrentUser, users);
-      const doc = await buildPdfDoc(settings);
+      const doc = await buildPdfDoc(draftPrintSettings);
       doc.save(`Master_Jenis_Pelanggaran_${new Date().toISOString().slice(0, 10)}.pdf`);
       toast.success('File PDF master jenis pelanggaran berhasil diunduh!');
     } catch (err) {
@@ -292,6 +302,18 @@ const ViolationTypeManagement: React.FC<ViolationTypeManagementProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => setShowPrePrintPanel((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer border ${
+                showPrePrintPanel
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+              }`}
+              title="Atur Kop Surat, Spasi, TTD & Font sebelum Pratinjau atau Cetak"
+            >
+              <Sliders className="w-3.5 h-3.5" /> Atur Kop, Spasi &amp; TTD
+            </button>
+            <button
+              type="button"
               onClick={handleDirectDownloadPdf}
               className="flex items-center gap-1.5 bg-white text-rose-700 border border-rose-200 hover:bg-rose-50 px-3 py-1.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
               title="Unduh langsung file PDF"
@@ -316,6 +338,66 @@ const ViolationTypeManagement: React.FC<ViolationTypeManagementProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Inline Pre-Print Kop, Spasi & TTD Settings Panel */}
+        {showPrePrintPanel && (
+          <div className="border-b border-indigo-100 bg-slate-50/80 p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div className="lg:col-span-5">
+              <PrintSettingsPanel
+                settings={draftPrintSettings}
+                onChange={setDraftPrintSettings}
+                appConfig={effectiveAppConfig}
+                currentUser={effectiveCurrentUser}
+                users={users}
+                onSaveDefaultSettings={onSavePrintSettings}
+                showFooterActions
+                className="rounded-2xl border border-slate-200 max-h-[500px]"
+              />
+            </div>
+            <div className="lg:col-span-7 flex flex-col justify-between gap-3">
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs overflow-x-auto space-y-4">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-700">
+                    Pratinjau Kop Surat &amp; TTD Sebelum Cetak Master Pelanggaran
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                    Spasi: {(draftPrintSettings.kopStyle.lineSpacing ?? 1).toFixed(1)}x • Bawah: {draftPrintSettings.kopStyle.bottomSpacing ?? 6} mm
+                  </span>
+                </div>
+                {draftPrintSettings.showKop ? (
+                  <KopSurat appConfig={effectiveAppConfig} printSettings={draftPrintSettings} showBorder />
+                ) : (
+                  <div className="py-4 text-center text-xs text-slate-400 border border-dashed border-slate-300 rounded-xl">
+                    Kop Surat dinonaktifkan pada dokumen ini.
+                  </div>
+                )}
+                <SignatureLayoutEditor
+                  compact
+                  settings={draftPrintSettings}
+                  onChange={setDraftPrintSettings}
+                  appConfig={effectiveAppConfig}
+                  currentUser={effectiveCurrentUser}
+                />
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleDirectDownloadPdf}
+                  className="px-3.5 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <FileDown className="w-3.5 h-3.5" /> Unduh PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintPdf}
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Pratinjau Lengkap &amp; Cetak PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {isFormOpen && (
           <div className="p-4 bg-sky-50 border-b border-sky-100 animate-in slide-in-from-top-2">
@@ -527,6 +609,8 @@ const ViolationTypeManagement: React.FC<ViolationTypeManagementProps> = ({
         onClose={() => setIsPrintModalOpen(false)}
         buildPdfDoc={buildPdfDoc}
         onSaveDefaultSettings={onSavePrintSettings}
+        defaultOverrides={draftPrintSettings}
+        onSettingsChange={setDraftPrintSettings}
       />
 
       {/* Delete ConfirmModal */}

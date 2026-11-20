@@ -1,7 +1,8 @@
 import { ViolationRecord, Student, AppConfig, User, PrintDocumentSettings } from '../types';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from './pdfKop';
+import { drawPdfKopSurat, drawPdfSignatures, getPdfFontFamily, resolvePrintSettings } from './pdfKop';
+import { loadStudentPdfPhoto, PdfImageAsset } from './pdfImages';
 
 export const isTardinessRecord = (record: { description?: string; points?: number }): boolean => {
   if (!record || !record.description) return false;
@@ -137,7 +138,7 @@ export const buildTardinessLetterPdfDoc = async (
   printSettings?: PrintDocumentSettings
 ): Promise<jsPDF> => {
   const settings = printSettings || resolvePrintSettings(appConfig, currentUser);
-  const font = settings.documentFontFamily || 'helvetica';
+  const font = getPdfFontFamily(settings.documentFontFamily);
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
 
@@ -178,17 +179,60 @@ export const buildTardinessLetterPdfDoc = async (
   doc.text(introLines, 15, currentY);
   currentY += introLines.length * 4.5 + 2;
 
-  // Biodata Siswa Box
-  doc.setFont(font, 'bold');
-  doc.text(`• Nama Siswa      : ${student.name}`, 20, currentY);
-  doc.text(`• NIS / NISN       : ${student.nis} / ${student.nisn || '-'}`, 20, currentY + 5);
-  doc.text(`• Kelas            : ${student.class}`, 20, currentY + 10);
-  doc.setFont(font, 'bold');
-  doc.setTextColor(180, 0, 0);
-  doc.text(`• Frekuensi Terlambat : ${tardinessInfo.count} KALI (${tardinessInfo.statusLabel})`, 20, currentY + 15);
-  doc.setTextColor(0, 0, 0);
+  const studentPhoto = await loadStudentPdfPhoto(student);
 
-  currentY += 22;
+  // Biodata Siswa Box (+ Foto Siswa di sisi kanan)
+  const bioTopY = currentY;
+  if (studentPhoto) {
+    const photoW = 18;
+    const photoH = 22;
+    const photoX = pageWidth - 15 - photoW;
+    const photoY = bioTopY - 2;
+    try {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(photoX - 0.6, photoY - 0.6, photoW + 1.2, photoH + 1.2, 'F');
+      doc.addImage(studentPhoto.dataUrl, studentPhoto.format, photoX, photoY, photoW, photoH);
+      doc.setDrawColor(203, 213, 225);
+      doc.rect(photoX - 0.6, photoY - 0.6, photoW + 1.2, photoH + 1.2, 'S');
+    } catch {
+      // ignore invalid image
+    }
+  }
+
+  const bioMaxWidth = studentPhoto ? pageWidth - 62 : pageWidth - 35;
+  doc.setFont(font, 'bold');
+  doc.text(`• Nama Siswa      : ${student.name}`, 20, currentY, { maxWidth: bioMaxWidth });
+  doc.text(`• NIS / NISN       : ${student.nis} / ${student.nisn || '-'}`, 20, currentY + 5, { maxWidth: bioMaxWidth });
+  doc.text(`• Kelas            : ${student.class}`, 20, currentY + 10, { maxWidth: bioMaxWidth });
+  if (student.waliKelas || student.guruBk) {
+    doc.text(
+      `• Wali Kelas / BK : ${student.waliKelas || '-'} / ${student.guruBk || '-'}`,
+      20,
+      currentY + 15,
+      { maxWidth: bioMaxWidth }
+    );
+    doc.setFont(font, 'bold');
+    doc.setTextColor(180, 0, 0);
+    doc.text(
+      `• Frekuensi Terlambat : ${tardinessInfo.count} KALI (${tardinessInfo.statusLabel})`,
+      20,
+      currentY + 20,
+      { maxWidth: bioMaxWidth }
+    );
+    doc.setTextColor(0, 0, 0);
+    currentY += 27;
+  } else {
+    doc.setFont(font, 'bold');
+    doc.setTextColor(180, 0, 0);
+    doc.text(
+      `• Frekuensi Terlambat : ${tardinessInfo.count} KALI (${tardinessInfo.statusLabel})`,
+      20,
+      currentY + 15,
+      { maxWidth: bioMaxWidth }
+    );
+    doc.setTextColor(0, 0, 0);
+    currentY += 22;
+  }
 
   const noticeText = `Berdasarkan data sistem kedisiplinan siswa (SiPerSis), siswa tersebut telah tercatat terlambat hadir sebanyak ${tardinessInfo.count} kali yang telah mencapai ambang batas peringatan (${tardinessInfo.count >= 6 ? 'Peringatan Lanjutan / SP' : 'Peringatan Tahap I'}). Oleh karena itu, kami mengharap kehadiran Bapak/Ibu pada:`;
   const noticeLines = doc.splitTextToSize(noticeText, pageWidth - 30);
@@ -270,12 +314,27 @@ export const buildAllTardinessRecapPdfDoc = async (
   tardinessList: StudentTardinessInfo[],
   appConfig: AppConfig,
   currentUser: User,
-  printSettings?: PrintDocumentSettings
+  printSettings?: PrintDocumentSettings,
+  students: Student[] = []
 ): Promise<jsPDF> => {
   const settings = printSettings || resolvePrintSettings(appConfig, currentUser);
-  const font = settings.documentFontFamily || 'helvetica';
+  const font = getPdfFontFamily(settings.documentFontFamily);
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
+
+  // Preload foto siswa untuk setiap baris rekap keterlambatan
+  const studentMap = new Map<string, Student>();
+  students.forEach(s => studentMap.set(s.id, s));
+  const photoMap = new Map<string, PdfImageAsset | null>();
+  await Promise.all(
+    tardinessList.map(async (item) => {
+      if (!photoMap.has(item.studentId)) {
+        const stu = studentMap.get(item.studentId);
+        const asset = await loadStudentPdfPhoto(stu || { gender: 'L' });
+        photoMap.set(item.studentId, asset);
+      }
+    })
+  );
 
   // Kop Surat Resmi
   const currentY = await drawPdfKopSurat(doc, appConfig, 8, settings);
@@ -292,6 +351,7 @@ export const buildAllTardinessRecapPdfDoc = async (
 
   const tableBody = tardinessList.map((item, index) => [
     (index + 1).toString(),
+    '',
     item.studentName,
     item.studentClass,
     `${item.count} kali`,
@@ -302,19 +362,36 @@ export const buildAllTardinessRecapPdfDoc = async (
 
   autoTable(doc, {
     startY: tableStartY,
-    head: [["No", "Nama Siswa", "Kelas", "Frekuensi", "Status Alarm", "Terakhir", "Tindakan Yang Diperlukan"]],
+    head: [["No", "Foto", "Nama Siswa", "Kelas", "Frekuensi", "Status Alarm", "Terakhir", "Tindakan Yang Diperlukan"]],
     body: tableBody,
     theme: 'grid',
-    styles: { font, fontSize: 8, cellPadding: 2.5 },
-    headStyles: { font, fillColor: [185, 28, 28], textColor: 255, halign: 'center' },
+    styles: { font, fontSize: 7.5, cellPadding: 2, valign: 'middle', minCellHeight: 16 },
+    headStyles: { font, fillColor: [185, 28, 28], textColor: 255, halign: 'center', minCellHeight: 8 },
     columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 38 },
-      2: { cellWidth: 20 },
+      0: { cellWidth: 9, halign: 'center' },
+      1: { cellWidth: 15, halign: 'center' },
+      2: { cellWidth: 33, fontStyle: 'bold' },
       3: { cellWidth: 18, halign: 'center' },
-      4: { cellWidth: 32 },
-      5: { cellWidth: 22, halign: 'center' },
-      6: { cellWidth: 42 }
+      4: { cellWidth: 17, halign: 'center' },
+      5: { cellWidth: 30 },
+      6: { cellWidth: 20, halign: 'center' },
+      7: { cellWidth: 'auto' }
+    },
+    didDrawCell: (data) => {
+      if (data.section !== 'body' || data.column.index !== 1) return;
+      const item = tardinessList[data.row.index];
+      if (!item) return;
+      const asset = photoMap.get(item.studentId);
+      if (!asset) return;
+      const boxW = Math.min(10, data.cell.width - 3);
+      const boxH = Math.min(13, data.cell.height - 2.5);
+      const x = data.cell.x + (data.cell.width - boxW) / 2;
+      const y = data.cell.y + (data.cell.height - boxH) / 2;
+      try {
+        doc.addImage(asset.dataUrl, asset.format, x, y, boxW, boxH);
+      } catch {
+        // ignore invalid image
+      }
     }
   });
 
@@ -328,9 +405,10 @@ export const generateAllTardinessRecapPdf = async (
   tardinessList: StudentTardinessInfo[],
   appConfig: AppConfig,
   currentUser: User,
-  printSettings?: PrintDocumentSettings
+  printSettings?: PrintDocumentSettings,
+  students: Student[] = []
 ): Promise<string> => {
-  const doc = await buildAllTardinessRecapPdfDoc(tardinessList, appConfig, currentUser, printSettings);
+  const doc = await buildAllTardinessRecapPdfDoc(tardinessList, appConfig, currentUser, printSettings, students);
   const blob = doc.output('blob');
   return URL.createObjectURL(blob);
 };

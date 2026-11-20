@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { toast } from 'sonner';
 import { ViolationRecord, Student, ViolationCategory, AppConfig, User, PrintDocumentSettings } from '../types';
 import { CLASS_LIST } from '../constants';
@@ -27,19 +27,25 @@ import {
   Trash2,
   FileSpreadsheet,
   FileDown,
-  Printer
+  Printer,
+  Sliders
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import ConfirmModal from './ConfirmModal';
 import PrintPreviewModal from './PrintPreviewModal';
+import PrintSettingsPanel from './PrintSettingsPanel';
+import { KopSurat } from './KopSurat';
+import { SignatureLayoutEditor } from './SignatureLayoutEditor';
 import { 
   getEvidenceImageForViolation, 
   downloadImageFile, 
   downloadMultipleImagesAsZip 
 } from '../utils/evidenceImages';
-import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import { drawPdfKopSurat, drawPdfSignatures, getPdfFontFamily, resolvePrintSettings } from '../utils/pdfKop';
 import { exportRowsToSpreadsheet } from '../utils/exportHelpers';
+import { loadStudentPdfPhoto, PdfImageAsset } from '../utils/pdfImages';
+import { StudentAvatar } from './StudentAvatar';
 
 interface EvidenceGalleryProps {
   violations: ViolationRecord[];
@@ -78,6 +84,14 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [recordToDelete, setRecordToDelete] = useState<ViolationRecord | null>(null);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [showPrePrintPanel, setShowPrePrintPanel] = useState(false);
+  const [draftPrintSettings, setDraftPrintSettings] = useState<PrintDocumentSettings>(() =>
+    resolvePrintSettings(appConfig, currentUser, users)
+  );
+
+  useEffect(() => {
+    setDraftPrintSettings(resolvePrintSettings(appConfig, currentUser, users));
+  }, [appConfig, currentUser, users]);
 
   // Only include records that have actual evidence photo attached
   const recordsWithEvidence = useMemo(() => {
@@ -221,9 +235,23 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
   const buildEvidencePdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
     const showPoints = settings.showPoints !== false;
-    const font = settings.documentFontFamily || 'helvetica';
+    const font = getPdfFontFamily(settings.documentFontFamily);
     const doc = new jsPDF({ orientation: 'landscape' });
     const pageWidth = doc.internal.pageSize.getWidth();
+
+    const studentMap = new Map<string, Student>();
+    students.forEach((s) => studentMap.set(s.id, s));
+    const studentPhotos = new Map<string, PdfImageAsset | null>();
+    await Promise.all(
+      filteredRecords.map(async (r) => {
+        if (!studentPhotos.has(r.studentId)) {
+          const stu = studentMap.get(r.studentId);
+          const asset = await loadStudentPdfPhoto(stu || { gender: 'L' });
+          studentPhotos.set(r.studentId, asset);
+        }
+      })
+    );
+
     const currentY = await drawPdfKopSurat(doc, appConfig, 8, settings);
 
     doc.setFontSize(12);
@@ -235,14 +263,15 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
     doc.text(`Tahun Ajaran: ${appConfig.academicYear} • Total ${filteredRecords.length} Dokumentasi`, pageWidth / 2, currentY + 11, { align: 'center' });
 
     const headRow = showPoints
-      ? ['No', 'Tanggal', 'Nama Siswa', 'Kelas', 'Kategori', 'Deskripsi Kejadian', 'Poin', 'Pelapor']
-      : ['No', 'Tanggal', 'Nama Siswa', 'Kelas', 'Kategori', 'Deskripsi Kejadian', 'Pelapor'];
+      ? ['No', 'Tanggal', 'Foto', 'Nama Siswa', 'Kelas', 'Kategori', 'Deskripsi Kejadian', 'Poin', 'Pelapor']
+      : ['No', 'Tanggal', 'Foto', 'Nama Siswa', 'Kelas', 'Kategori', 'Deskripsi Kejadian', 'Pelapor'];
 
     const bodyRows = filteredRecords.map((r, idx) =>
       showPoints
         ? [
             idx + 1,
             r.date ? new Date(r.date).toLocaleDateString('id-ID') : '-',
+            '',
             r.studentName,
             r.studentClass,
             r.category,
@@ -253,6 +282,7 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
         : [
             idx + 1,
             r.date ? new Date(r.date).toLocaleDateString('id-ID') : '-',
+            '',
             r.studentName,
             r.studentClass,
             r.category,
@@ -264,22 +294,24 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
     const columnStyles: Record<number, any> = showPoints
       ? {
           0: { cellWidth: 10, halign: 'center' },
-          1: { cellWidth: 24, halign: 'center' },
-          2: { cellWidth: 42, fontStyle: 'bold' },
-          3: { cellWidth: 18, halign: 'center' },
-          4: { cellWidth: 22, halign: 'center' },
-          5: { cellWidth: 'auto' },
-          6: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
-          7: { cellWidth: 32 },
+          1: { cellWidth: 23, halign: 'center' },
+          2: { cellWidth: 16, halign: 'center' },
+          3: { cellWidth: 38, fontStyle: 'bold' },
+          4: { cellWidth: 18, halign: 'center' },
+          5: { cellWidth: 22, halign: 'center' },
+          6: { cellWidth: 'auto' },
+          7: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
+          8: { cellWidth: 30 },
         }
       : {
           0: { cellWidth: 10, halign: 'center' },
-          1: { cellWidth: 24, halign: 'center' },
-          2: { cellWidth: 42, fontStyle: 'bold' },
-          3: { cellWidth: 18, halign: 'center' },
-          4: { cellWidth: 22, halign: 'center' },
-          5: { cellWidth: 'auto' },
-          6: { cellWidth: 34 },
+          1: { cellWidth: 23, halign: 'center' },
+          2: { cellWidth: 16, halign: 'center' },
+          3: { cellWidth: 38, fontStyle: 'bold' },
+          4: { cellWidth: 18, halign: 'center' },
+          5: { cellWidth: 22, halign: 'center' },
+          6: { cellWidth: 'auto' },
+          7: { cellWidth: 32 },
         };
 
     autoTable(doc, {
@@ -287,9 +319,25 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
       head: [headRow],
       body: bodyRows,
       theme: 'grid',
-      styles: { fontSize: 8, cellPadding: 2.5, valign: 'middle', font },
-      headStyles: { fillColor: [79, 70, 229], textColor: 255, halign: 'center', font },
+      styles: { fontSize: 8, cellPadding: 2, valign: 'middle', minCellHeight: 16, font },
+      headStyles: { fillColor: [79, 70, 229], textColor: 255, halign: 'center', minCellHeight: 8, font },
       columnStyles,
+      didDrawCell: (data) => {
+        if (data.section !== 'body' || data.column.index !== 2) return;
+        const rec = filteredRecords[data.row.index];
+        if (!rec) return;
+        const asset = studentPhotos.get(rec.studentId);
+        if (!asset) return;
+        const boxW = Math.min(10, data.cell.width - 3);
+        const boxH = Math.min(13, data.cell.height - 2.5);
+        const x = data.cell.x + (data.cell.width - boxW) / 2;
+        const y = data.cell.y + (data.cell.height - boxH) / 2;
+        try {
+          doc.addImage(asset.dataUrl, asset.format, x, y, boxW, boxH);
+        } catch {
+          // ignore
+        }
+      },
     });
 
     const finalY = ((doc as any).lastAutoTable?.finalY || currentY + 30) + 12;
@@ -304,8 +352,7 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
       return;
     }
     try {
-      const settings = resolvePrintSettings(appConfig, currentUser, users);
-      const doc = await buildEvidencePdfDoc(settings);
+      const doc = await buildEvidencePdfDoc(draftPrintSettings);
       doc.save(`Daftar_Bukti_Foto_${new Date().toISOString().slice(0, 10)}.pdf`);
       toast.success('File PDF daftar bukti foto berhasil diunduh!');
     } catch (err) {
@@ -400,44 +447,58 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
         </div>
 
         {/* Global Export Buttons */}
-        <div className="relative z-10 flex flex-wrap gap-2.5 shrink-0">
+        <div className="relative z-10 grid grid-cols-2 sm:flex sm:flex-wrap gap-2 w-full xl:w-auto shrink-0">
           <button
             onClick={handleDownloadXls}
             disabled={filteredRecords.length === 0}
-            className="px-4 py-3 bg-white hover:bg-teal-50 text-teal-700 border border-teal-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+            className="px-3.5 py-2.5 sm:py-3 bg-white hover:bg-teal-50 text-teal-700 border border-teal-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
             title="Unduh daftar laporan bukti foto ke format Excel (.xls)"
           >
-            <FileSpreadsheet className="w-4 h-4" />
+            <FileSpreadsheet className="w-4 h-4 shrink-0" />
             Unduh XLS
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowPrePrintPanel((v) => !v)}
+            className={`px-3.5 py-2.5 sm:py-3 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 border cursor-pointer shadow-xs ${
+              showPrePrintPanel
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200'
+            }`}
+            title="Atur Kop Surat, Spasi, TTD & Font sebelum Pratinjau atau Cetak"
+          >
+            <Sliders className="w-4 h-4 shrink-0" />
+            <span className="truncate">Atur Kop &amp; TTD</span>
           </button>
 
           <button
             onClick={handleDirectDownloadPdf}
             disabled={filteredRecords.length === 0}
-            className="px-4 py-3 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+            className="px-3.5 py-2.5 sm:py-3 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
             title="Unduh langsung daftar laporan bukti foto ke PDF"
           >
-            <FileDown className="w-4 h-4" />
+            <FileDown className="w-4 h-4 shrink-0" />
             Unduh PDF
           </button>
 
           <button
             onClick={handlePrintPdf}
             disabled={filteredRecords.length === 0}
-            className="px-4 py-3 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+            className="px-3.5 py-2.5 sm:py-3 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
             title="Pratinjau & Cetak PDF"
           >
-            <Printer className="w-4 h-4" />
+            <Printer className="w-4 h-4 shrink-0" />
             Cetak PDF
           </button>
 
           <button
             onClick={handleDownloadAllFilteredZip}
             disabled={isZipping || filteredRecords.length === 0}
-            className="px-5 py-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-2xl font-bold text-xs shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            className="col-span-2 sm:col-span-1 px-4 sm:px-5 py-2.5 sm:py-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-2xl font-bold text-xs shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             title="Unduh semua foto yang tampil dalam file ZIP"
           >
-            <FileArchive className="w-4 h-4" />
+            <FileArchive className="w-4 h-4 shrink-0" />
             {isZipping ? 'Mengompresi ZIP...' : `Unduh Semua (${filteredRecords.length}) ZIP`}
           </button>
 
@@ -453,6 +514,71 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
           )}
         </div>
       </div>
+
+      {/* Inline Pre-Print Kop, Spasi & TTD Settings Panel */}
+      {showPrePrintPanel && (
+        <div className="bg-white rounded-3xl border border-indigo-200 shadow-sm p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-5">
+            <PrintSettingsPanel
+              settings={draftPrintSettings}
+              onChange={setDraftPrintSettings}
+              appConfig={appConfig}
+              currentUser={currentUser}
+              users={users}
+              onSaveDefaultSettings={onSavePrintSettings}
+              showFooterActions
+              className="rounded-2xl border border-slate-200 max-h-[500px]"
+            />
+          </div>
+          <div className="lg:col-span-7 flex flex-col justify-between gap-3">
+            <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 overflow-x-auto space-y-4">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-700">
+                  Pratinjau Kop Surat &amp; TTD Sebelum Cetak Bukti Foto
+                </span>
+                <span className="text-[10px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">
+                  Spasi: {(draftPrintSettings.kopStyle.lineSpacing ?? 1).toFixed(1)}x • Bawah: {draftPrintSettings.kopStyle.bottomSpacing ?? 6} mm
+                </span>
+              </div>
+              {draftPrintSettings.showKop ? (
+                <div className="bg-white p-3 rounded-xl border border-slate-200 min-w-[480px] sm:min-w-0">
+                  <KopSurat appConfig={appConfig} printSettings={draftPrintSettings} showBorder />
+                </div>
+              ) : (
+                <div className="py-4 text-center text-xs text-slate-400 border border-dashed border-slate-300 rounded-xl bg-white">
+                  Kop Surat dinonaktifkan pada dokumen ini.
+                </div>
+              )}
+              <SignatureLayoutEditor
+                compact
+                settings={draftPrintSettings}
+                onChange={setDraftPrintSettings}
+                appConfig={appConfig}
+                currentUser={currentUser}
+                usableWidthMm={267}
+              />
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleDirectDownloadPdf}
+                disabled={filteredRecords.length === 0}
+                className="px-3.5 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <FileDown className="w-3.5 h-3.5" /> Unduh PDF
+              </button>
+              <button
+                type="button"
+                onClick={handlePrintPdf}
+                disabled={filteredRecords.length === 0}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+              >
+                <Printer className="w-3.5 h-3.5" /> Pratinjau Lengkap &amp; Cetak PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Progress Bar if Zipping */}
       {zipProgress && (
@@ -474,16 +600,16 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
       )}
 
       {/* Filter and View Bar */}
-      <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200/80 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="bg-white rounded-2xl p-3.5 sm:p-4 shadow-sm border border-slate-200/80 flex flex-col lg:flex-row lg:items-center justify-between gap-3 sm:gap-4">
         {/* Search */}
-        <div className="relative flex-1 min-w-[240px]">
+        <div className="relative flex-1 min-w-0 w-full">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
           <input
             type="text"
             placeholder="Cari siswa, kelas, jenis pelanggaran, pelapor..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition"
+            className="w-full pl-10 pr-4 py-2.5 sm:py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition"
           />
         </div>
 
@@ -493,7 +619,7 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer"
+            className="flex-1 sm:flex-none px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer"
           >
             <option value="all">Semua Kategori</option>
             <option value={ViolationCategory.RINGAN}>Pelanggaran Ringan</option>
@@ -506,7 +632,7 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
           <select
             value={classFilter}
             onChange={(e) => setClassFilter(e.target.value)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer"
+            className="flex-1 sm:flex-none px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer"
           >
             <option value="">Semua Kelas</option>
             {CLASS_LIST.map(cls => (
@@ -558,7 +684,7 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
 
       {/* Batch Select Actions Bar */}
       {filteredRecords.length > 0 && (
-        <div className="flex items-center justify-between px-2 text-xs text-slate-600">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-2 text-xs text-slate-600">
           <div className="flex items-center gap-3">
             <button
               onClick={handleSelectAll}
@@ -577,7 +703,7 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
           </div>
 
           {selectedIds.length > 0 && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="font-bold text-slate-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100">
                 {selectedIds.length} foto dipilih
               </span>
@@ -728,13 +854,16 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
                 <div className="p-4 flex-1 flex flex-col justify-between">
                   <div>
                     {/* Student Info */}
-                    <div className="flex items-start justify-between gap-1 mb-1">
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
                       <button
                         onClick={() => studentObj && onViewStudent(studentObj)}
-                        className="text-sm font-black text-slate-900 hover:text-indigo-600 transition text-left truncate leading-tight"
+                        className="flex items-center gap-2 min-w-0 text-left group/stu"
                         title={record.studentName}
                       >
-                        {record.studentName}
+                        <StudentAvatar student={studentObj} name={record.studentName} sizeClass="w-7 h-7" />
+                        <span className="text-sm font-black text-slate-900 group-hover/stu:text-indigo-600 transition truncate leading-tight">
+                          {record.studentName}
+                        </span>
                       </button>
                       <span className="text-[11px] font-bold px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md shrink-0">
                         {record.studentClass}
@@ -837,13 +966,18 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
                         </div>
                       </td>
                       <td className="p-4">
-                        <button
-                          onClick={() => studentObj && onViewStudent(studentObj)}
-                          className="font-bold text-slate-900 hover:text-indigo-600 transition text-left block"
-                        >
-                          {record.studentName}
-                        </button>
-                        <span className="text-xs text-slate-500 font-semibold">{record.studentClass}</span>
+                        <div className="flex items-center gap-2.5">
+                          <StudentAvatar student={studentObj} name={record.studentName} sizeClass="w-9 h-9" />
+                          <div className="min-w-0">
+                            <button
+                              onClick={() => studentObj && onViewStudent(studentObj)}
+                              className="font-bold text-slate-900 hover:text-indigo-600 transition text-left block truncate"
+                            >
+                              {record.studentName}
+                            </button>
+                            <span className="text-xs text-slate-500 font-semibold">{record.studentClass}</span>
+                          </div>
+                        </div>
                       </td>
                       <td className="p-4">
                         <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${
@@ -915,9 +1049,12 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
             {/* Modal Header */}
             <div className="p-4 bg-slate-800 border-b border-slate-700 flex items-center justify-between text-white shrink-0">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl">
-                  <Images className="w-5 h-5" />
-                </div>
+                <StudentAvatar
+                  student={students.find(s => s.id === previewRecord.studentId)}
+                  name={previewRecord.studentName}
+                  sizeClass="w-10 h-10"
+                  className="border-slate-600"
+                />
                 <div>
                   <h4 className="font-bold text-sm leading-tight">
                     {previewRecord.studentName} ({previewRecord.studentClass})
@@ -1004,8 +1141,11 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
             </p>
             <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-600 mb-2 max-h-36 overflow-y-auto divide-y divide-slate-100">
               {recordsWithEvidence.filter(r => selectedIds.includes(r.id)).slice(0, 5).map(r => (
-                <div key={r.id} className="py-1">
-                  <span className="font-bold text-slate-800">{r.studentName} ({r.studentClass})</span> - {r.description}
+                <div key={r.id} className="py-1.5 flex items-center gap-2">
+                  <StudentAvatar student={students.find(s => s.id === r.studentId)} name={r.studentName} sizeClass="w-6 h-6" />
+                  <div className="min-w-0 truncate">
+                    <span className="font-bold text-slate-800">{r.studentName} ({r.studentClass})</span> - {r.description}
+                  </div>
                 </div>
               ))}
               {selectedIds.length > 5 && (
@@ -1031,11 +1171,14 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
           <div>
             <p className="mb-2">Apakah Anda yakin ingin menghapus laporan dan bukti foto ini?</p>
             {recordToDelete && (
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-600 mb-2">
-                <div><strong>Siswa:</strong> {recordToDelete.studentName} ({recordToDelete.studentClass})</div>
-                <div><strong>Kategori:</strong> {recordToDelete.category} ({recordToDelete.points > 0 ? `+${recordToDelete.points}` : recordToDelete.points} Poin)</div>
-                <div><strong>Keterangan:</strong> {recordToDelete.description}</div>
-                <div><strong>Tanggal:</strong> {recordToDelete.date?.split('T')[0]}</div>
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-600 mb-2 flex items-start gap-2.5">
+                <StudentAvatar student={students.find(s => s.id === recordToDelete.studentId)} name={recordToDelete.studentName} sizeClass="w-9 h-9" />
+                <div className="min-w-0">
+                  <div><strong>Siswa:</strong> {recordToDelete.studentName} ({recordToDelete.studentClass})</div>
+                  <div><strong>Kategori:</strong> {recordToDelete.category} ({recordToDelete.points > 0 ? `+${recordToDelete.points}` : recordToDelete.points} Poin)</div>
+                  <div><strong>Keterangan:</strong> {recordToDelete.description}</div>
+                  <div><strong>Tanggal:</strong> {recordToDelete.date?.split('T')[0]}</div>
+                </div>
               </div>
             )}
             <p className="text-rose-600 text-xs font-semibold">
@@ -1058,6 +1201,8 @@ export const EvidenceGallery: React.FC<EvidenceGalleryProps> = ({
         onClose={() => setIsPrintModalOpen(false)}
         buildPdfDoc={buildEvidencePdfDoc}
         onSaveDefaultSettings={onSavePrintSettings}
+        defaultOverrides={draftPrintSettings}
+        onSettingsChange={setDraftPrintSettings}
       />
     </div>
   );

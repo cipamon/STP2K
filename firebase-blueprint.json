@@ -21,6 +21,8 @@
         "photoUrl": { "type": "string" },
         "avatar": { "type": "string" },
         "status": { "type": "string" },
+        "waliKelas": { "type": "string" },
+        "guruBk": { "type": "string" },
         "totalPoints": { "type": "number" },
         "academicYear": { "type": "string" }
       },
@@ -104,7 +106,7 @@
         "provinsiLogoUrl": { "type": "string" },
         "webhookUrl": { "type": "string" },
         "webhookEnabled": { "type": "boolean" },
-        "printSettings": { "type": "object", "description": "Default print, Kop Surat typography, signature layout, and points visibility settings" }
+        "printSettings": { "type": "object", "description": "Default print, Kop Surat typography & spacing, signature layout, and points visibility settings" }
       },
       "required": ["schoolName", "academicYear", "theme"]
     }

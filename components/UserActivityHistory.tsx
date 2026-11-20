@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { UserActivityLog, UserRole, AppTheme, User, AppConfig, PrintDocumentSettings } from '../types';
 import { DEFAULT_APP_CONFIG } from '../constants';
 import { 
@@ -18,13 +18,17 @@ import {
   ShieldAlert, 
   Printer, 
   FileSpreadsheet,
-  FileDown
+  FileDown,
+  Sliders
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getActionLabel, formatRelativeTime, exportActivitiesToExcel } from '../utils/activityLogger';
-import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import { drawPdfKopSurat, drawPdfSignatures, getPdfFontFamily, resolvePrintSettings } from '../utils/pdfKop';
 import PrintPreviewModal from './PrintPreviewModal';
+import PrintSettingsPanel from './PrintSettingsPanel';
+import { KopSurat } from './KopSurat';
+import { SignatureLayoutEditor } from './SignatureLayoutEditor';
 import { getDefaultUserAvatar, getUserAvatar } from '../utils/avatarHelpers';
 import { toast } from 'sonner';
 
@@ -49,6 +53,13 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
 }) => {
   const effectiveAppConfig = appConfig || DEFAULT_APP_CONFIG;
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [showPrePrintPanel, setShowPrePrintPanel] = useState(false);
+  const [draftPrintSettings, setDraftPrintSettings] = useState<PrintDocumentSettings>(() =>
+    resolvePrintSettings(effectiveAppConfig, currentUser, users)
+  );
+  useEffect(() => {
+    setDraftPrintSettings(resolvePrintSettings(effectiveAppConfig, currentUser, users));
+  }, [effectiveAppConfig, currentUser, users]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedActionCategory, setSelectedActionCategory] = useState<string>('ALL');
   const [selectedUserFilter, setSelectedUserFilter] = useState<string>('ALL');
@@ -137,7 +148,7 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
 
   const buildActivityPdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(effectiveAppConfig, currentUser, users);
-    const font = settings.documentFontFamily || 'helvetica';
+    const font = getPdfFontFamily(settings.documentFontFamily);
     const doc = new jsPDF({ orientation: 'landscape' });
     const pageWidth = doc.internal.pageSize.getWidth();
     const currentY = await drawPdfKopSurat(doc, effectiveAppConfig, 8, settings);
@@ -188,8 +199,7 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
       return;
     }
     try {
-      const settings = resolvePrintSettings(effectiveAppConfig, currentUser, users);
-      const doc = await buildActivityPdfDoc(settings);
+      const doc = await buildActivityPdfDoc(draftPrintSettings);
       doc.save(`Log_Aktivitas_SiPerSis_${new Date().toISOString().slice(0, 10)}.pdf`);
       toast.success('File PDF log aktivitas berhasil diunduh!');
     } catch (err) {
@@ -262,6 +272,18 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
             <FileSpreadsheet className="w-4 h-4" /> Unduh XLS
           </button>
           <button
+            type="button"
+            onClick={() => setShowPrePrintPanel((v) => !v)}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm border cursor-pointer ${
+              showPrePrintPanel
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+            }`}
+            title="Atur Kop Surat, Spasi, TTD & Font sebelum Pratinjau atau Cetak"
+          >
+            <Sliders className="w-4 h-4" /> Atur Kop, Spasi &amp; TTD
+          </button>
+          <button
             onClick={handleDirectDownloadPdf}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
           >
@@ -288,6 +310,69 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
           )}
         </div>
       </div>
+
+      {/* Inline Pre-Print Kop, Spasi & TTD Settings Panel */}
+      {showPrePrintPanel && (
+        <div className="bg-white rounded-2xl border border-indigo-200 shadow-sm p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-5">
+            <PrintSettingsPanel
+              settings={draftPrintSettings}
+              onChange={setDraftPrintSettings}
+              appConfig={effectiveAppConfig}
+              currentUser={currentUser}
+              users={users}
+              onSaveDefaultSettings={onSavePrintSettings}
+              showFooterActions
+              className="rounded-2xl border border-slate-200 max-h-[500px]"
+            />
+          </div>
+          <div className="lg:col-span-7 flex flex-col justify-between gap-3">
+            <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 overflow-x-auto space-y-4">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-700">
+                  Pratinjau Kop Surat &amp; TTD Sebelum Cetak Log Aktivitas
+                </span>
+                <span className="text-[10px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">
+                  Spasi: {(draftPrintSettings.kopStyle.lineSpacing ?? 1).toFixed(1)}x • Bawah: {draftPrintSettings.kopStyle.bottomSpacing ?? 6} mm
+                </span>
+              </div>
+              {draftPrintSettings.showKop ? (
+                <div className="bg-white p-3 rounded-xl border border-slate-200">
+                  <KopSurat appConfig={effectiveAppConfig} printSettings={draftPrintSettings} showBorder />
+                </div>
+              ) : (
+                <div className="py-4 text-center text-xs text-slate-400 border border-dashed border-slate-300 rounded-xl bg-white">
+                  Kop Surat dinonaktifkan pada dokumen ini.
+                </div>
+              )}
+              <SignatureLayoutEditor
+                compact
+                settings={draftPrintSettings}
+                onChange={setDraftPrintSettings}
+                appConfig={effectiveAppConfig}
+                currentUser={currentUser}
+                usableWidthMm={267}
+              />
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleDirectDownloadPdf}
+                className="px-3.5 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <FileDown className="w-3.5 h-3.5" /> Unduh PDF
+              </button>
+              <button
+                type="button"
+                onClick={handlePrint}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" /> Pratinjau Lengkap &amp; Cetak PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -610,6 +695,8 @@ export const UserActivityHistory: React.FC<UserActivityHistoryProps> = ({
         onClose={() => setIsPrintModalOpen(false)}
         buildPdfDoc={buildActivityPdfDoc}
         onSaveDefaultSettings={onSavePrintSettings}
+        defaultOverrides={draftPrintSettings}
+        onSettingsChange={setDraftPrintSettings}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -16,6 +16,9 @@ import {
   Calendar,
   Camera,
   CheckSquare,
+  ChevronDown,
+  ChevronUp,
+  Eye,
   FileDown,
   FileSpreadsheet,
   FileText,
@@ -25,6 +28,7 @@ import {
   Printer,
   RotateCcw,
   Search,
+  Sliders,
   Square,
   UserCheck,
   Users,
@@ -33,7 +37,17 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import PrintPreviewModal from './PrintPreviewModal';
-import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import PrintSettingsPanel from './PrintSettingsPanel';
+import { StudentAvatar } from './StudentAvatar';
+import { KopSurat } from './KopSurat';
+import { SignatureLayoutEditor } from './SignatureLayoutEditor';
+import {
+  drawPdfKopSurat,
+  drawPdfSignatures,
+  getCssFontFamily,
+  getPdfFontFamily,
+  resolvePrintSettings,
+} from '../utils/pdfKop';
 import { loadEvidencePdfPhoto, loadStudentPdfPhoto, PdfImageAsset } from '../utils/pdfImages';
 import {
   formatBirthPlaceDate,
@@ -123,9 +137,35 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
   // Photo & Points Inclusion Controls
   const [includeStudentPhoto, setIncludeStudentPhoto] = useState<boolean>(true);
   const [includeEvidencePhoto, setIncludeEvidencePhoto] = useState<boolean>(true);
+  const [printDraft, setPrintDraft] = useState<PrintDocumentSettings>(() =>
+    resolvePrintSettings(appConfig, currentUser, users)
+  );
   const [includePoints, setIncludePoints] = useState<boolean>(
     () => resolvePrintSettings(appConfig, currentUser, users).showPoints !== false
   );
+  const [isPrePrintOpen, setIsPrePrintOpen] = useState<boolean>(true);
+
+  // Sync printDraft when cloud appConfig.printSettings updates
+  useEffect(() => {
+    const resolved = resolvePrintSettings(appConfig, currentUser, users);
+    setPrintDraft(resolved);
+    setIncludePoints(resolved.showPoints !== false);
+  }, [appConfig, currentUser, users]);
+
+  const handlePrintDraftChange: React.Dispatch<React.SetStateAction<PrintDocumentSettings>> = (
+    updater
+  ) => {
+    setPrintDraft((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      setIncludePoints(next.showPoints !== false);
+      return next;
+    });
+  };
+
+  const handleToggleIncludePoints = (checked: boolean) => {
+    setIncludePoints(checked);
+    setPrintDraft((prev) => ({ ...prev, showPoints: checked }));
+  };
 
   // Manual student checkbox selection (optional subset)
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
@@ -193,7 +233,9 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
             s.name.toLowerCase().includes(q) ||
             s.nis.toLowerCase().includes(q) ||
             (s.nisn || '').toLowerCase().includes(q) ||
-            s.class.toLowerCase().includes(q);
+            s.class.toLowerCase().includes(q) ||
+            (s.waliKelas || '').toLowerCase().includes(q) ||
+            (s.guruBk || '').toLowerCase().includes(q);
           if (!hit) return false;
         }
         const stuViolations = violationsByStudent.get(s.id) || [];
@@ -279,7 +321,9 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     setSelectedStudentIds([]);
     setIncludeStudentPhoto(true);
     setIncludeEvidencePhoto(true);
-    setIncludePoints(resolvePrintSettings(appConfig, currentUser, users).showPoints !== false);
+    const resolved = resolvePrintSettings(appConfig, currentUser, users);
+    setPrintDraft(resolved);
+    setIncludePoints(resolved.showPoints !== false);
   };
 
   // Preload photos safely for jsPDF
@@ -322,7 +366,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
       customSettings ||
       resolvePrintSettings(appConfig, currentUser, users, { showPoints: includePoints });
     const showPoints = settings.showPoints !== false;
-    const font = settings.documentFontFamily || 'helvetica';
+    const font = getPdfFontFamily(settings.documentFontFamily);
     const doc = new jsPDF({ orientation });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
@@ -371,14 +415,14 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
           ? stuRecs.filter((r) => Boolean(r.evidenceUrl) && evidencePhotos.get(r.id))
           : [];
 
-        // Check if header box fits (~44mm needed)
-        if (curY + 46 > pageHeight - 16) {
+        // Check if header box fits (~50mm needed)
+        if (curY + 52 > pageHeight - 16) {
           doc.addPage();
           curY = 16;
         }
 
         // Student Profile Box
-        const boxHeight = 36;
+        const boxHeight = 42;
         doc.setFillColor(248, 250, 252);
         doc.setDrawColor(203, 213, 225);
         doc.setLineWidth(0.35);
@@ -407,10 +451,10 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
 
         let infoStartX = leftMargin + 4;
         if (includeStudentPhoto) {
-          const photoW = 21;
-          const photoH = 26;
+          const photoW = 22;
+          const photoH = 28;
           const photoX = leftMargin + 3.5;
-          const photoY = curY + 8.5;
+          const photoY = curY + 9.5;
           doc.setFillColor(255, 255, 255);
           doc.setDrawColor(148, 163, 184);
           doc.rect(photoX, photoY, photoW, photoH, 'FD');
@@ -451,13 +495,15 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         drawKV(leftColX, detailY + 4.8, 'Kelas / Absen', `: ${stu.class} / No. ${stu.absenNumber || '-'}`);
         drawKV(leftColX, detailY + 9.6, 'Jenis Kelamin', `: ${stu.gender === 'P' ? 'Perempuan (P)' : 'Laki-laki (L)'}`);
         drawKV(leftColX, detailY + 14.4, 'Tempat, Tgl Lhr', `: ${formatBirthPlaceDate(stu.birthPlace, stu.birthDate, true)}`);
-        drawKV(leftColX, detailY + 19.2, 'Tahun Ajaran', `: ${stu.academicYear || appConfig.academicYear}`);
+        drawKV(leftColX, detailY + 19.2, 'Wali Kelas', `: ${stu.waliKelas || '-'}`);
+        drawKV(leftColX, detailY + 24.0, 'Tahun Ajaran', `: ${stu.academicYear || appConfig.academicYear}`);
 
         drawKV(rightColX, detailY, 'No. HP / WA', `: ${getStudentPhone(stu) || '-'}`);
         drawKV(rightColX, detailY + 4.8, 'Email', `: ${stu.email || '-'}`);
         drawKV(rightColX, detailY + 9.6, 'Status Siswa', `: ${getStudentStatus(stu)}`);
-        drawKV(rightColX, detailY + 14.4, 'Jml Catatan', `: ${stuRecs.length} Kejadian (${recsWithPhotos.length} Bukti Foto)`);
-        drawKV(rightColX, detailY + 19.2, 'Alamat', `: ${stu.address || '-'}`);
+        drawKV(rightColX, detailY + 14.4, 'Guru BK', `: ${stu.guruBk || '-'}`);
+        drawKV(rightColX, detailY + 19.2, 'Jml Catatan', `: ${stuRecs.length} Kejadian (${recsWithPhotos.length} Foto)`);
+        drawKV(rightColX, detailY + 24.0, 'Alamat', `: ${stu.address || '-'}`);
 
         curY += boxHeight + 3;
 
@@ -616,7 +662,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
       const bodyRows = targetViolations.map((rec, idx) => {
         const stu = studentById.get(rec.studentId);
         const studentSummary = stu
-          ? `${stu.name}\nNIS: ${stu.nis} | Kelas: ${stu.class}\nStatus: ${getStudentStatus(stu)}${
+          ? `${stu.name}\nNIS: ${stu.nis} | Kelas: ${stu.class}\nWali: ${stu.waliKelas || '-'} | BK: ${stu.guruBk || '-'}\nStatus: ${getStudentStatus(stu)}${
               showPoints ? ` | Total: ${stu.totalPoints} Poin` : ''
             }`
           : `${rec.studentName}\nKelas: ${rec.studentClass}`;
@@ -725,7 +771,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
       headRow.push(
         'NIS / NISN',
         'Nama Lengkap & L/P',
-        'Kelas',
+        'Kelas & Pembina',
         'Tempat, Tgl Lahir',
         'Kontak & Alamat',
         showPoints ? 'Status & Poin' : 'Status'
@@ -737,7 +783,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         row.push(
           `${s.nis}\n${s.nisn || '-'}`,
           `${s.name}\n(${s.gender === 'P' ? 'Perempuan' : 'Laki-laki'})`,
-          s.class,
+          `${s.class}\nWali: ${s.waliKelas || '-'}\nBK: ${s.guruBk || '-'}`,
           formatBirthPlaceDate(s.birthPlace, s.birthDate, true),
           `${getStudentPhone(s) || '-'}${s.email ? `\n${s.email}` : ''}${s.address ? `\n${s.address}` : ''}`,
           showPoints ? `${getStudentStatus(s)}\nPoin: ${s.totalPoints}` : getStudentStatus(s)
@@ -752,10 +798,10 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
       if (includeStudentPhoto) {
         columnStyles[c++] = { cellWidth: 20, halign: 'center' };
       }
-      columnStyles[c++] = { cellWidth: 26 };
-      columnStyles[c++] = { cellWidth: 42, fontStyle: 'bold' };
-      columnStyles[c++] = { cellWidth: 17, halign: 'center' };
-      columnStyles[c++] = { cellWidth: 34 };
+      columnStyles[c++] = { cellWidth: 25 };
+      columnStyles[c++] = { cellWidth: 38, fontStyle: 'bold' };
+      columnStyles[c++] = { cellWidth: 32 };
+      columnStyles[c++] = { cellWidth: 32 };
       columnStyles[c++] = { cellWidth: 'auto' };
       columnStyles[c++] = { cellWidth: 22, halign: 'center', fontStyle: 'bold' };
 
@@ -920,10 +966,10 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     setIsPreparingDownload(true);
     try {
       toast.info('Menyiapkan laporan PDF beserta foto...');
-      const settings = resolvePrintSettings(appConfig, currentUser, users, {
+      const doc = await buildReportPdfDoc({
+        ...printDraft,
         showPoints: includePoints,
       });
-      const doc = await buildReportPdfDoc(settings);
       doc.save(
         `Laporan_Terpadu_${reportType}_${filterClass || 'Semua'}_${new Date()
           .toISOString()
@@ -952,6 +998,8 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         'Nama Lengkap': s.name,
         Kelas: s.class,
         'No Absen': s.absenNumber || '-',
+        'Wali Kelas': s.waliKelas || '-',
+        'Guru BK': s.guruBk || '-',
         JK: s.gender,
         'Tempat, Tgl Lahir': formatBirthPlaceDate(s.birthPlace, s.birthDate, false),
         'No HP': getStudentPhone(s) || '-',
@@ -965,7 +1013,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         rows,
         'Direktori Siswa',
         `Laporan_Direktori_Siswa_${new Date().toISOString().slice(0, 10)}`,
-        [6, 12, 14, 26, 12, 10, 6, 22, 16, 22, 30, 12, 10, 32],
+        [6, 12, 14, 26, 12, 10, 22, 22, 6, 22, 16, 22, 30, 12, 10, 32],
         'xls'
       );
       toast.success(`Berhasil mengunduh ${rows.length} baris data (.xls)!`);
@@ -1005,6 +1053,8 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         NIS: s?.nis || '-',
         'Nama Siswa': v.studentName,
         Kelas: v.studentClass,
+        'Wali Kelas': s?.waliKelas || '-',
+        'Guru BK': s?.guruBk || '-',
         Status: s ? getStudentStatus(s) : 'Aktif',
         Kategori: v.category,
         Deskripsi: v.description,
@@ -1020,7 +1070,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
       rows,
       'Laporan Terpadu',
       `Laporan_Terpadu_Siswa_Foto_${new Date().toISOString().slice(0, 10)}`,
-      [6, 14, 12, 24, 12, 12, 14, 38, 12, 14, 18, 28, 28],
+      [6, 14, 12, 24, 12, 20, 20, 12, 14, 38, 12, 14, 18, 28, 28],
       'xls'
     );
     toast.success(`Berhasil mengunduh ${rows.length} baris laporan terpadu (.xls)!`);
@@ -1069,23 +1119,23 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         </div>
 
         {/* Main Print / Export Buttons */}
-        <div className="relative z-10 flex flex-wrap gap-2.5 shrink-0">
+        <div className="relative z-10 grid grid-cols-2 sm:flex sm:flex-wrap gap-2.5 w-full xl:w-auto shrink-0">
           <button
             type="button"
             onClick={handleExportExcel}
             disabled={!hasPrintableData}
-            className="px-4 py-3 bg-white hover:bg-teal-50 text-teal-700 border border-teal-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+            className="px-3.5 py-2.5 sm:py-3 bg-white hover:bg-teal-50 text-teal-700 border border-teal-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
           >
-            <FileSpreadsheet className="w-4 h-4" /> Unduh XLS
+            <FileSpreadsheet className="w-4 h-4 shrink-0" /> Unduh XLS
           </button>
 
           <button
             type="button"
             onClick={handleDirectDownloadPdf}
             disabled={!hasPrintableData || isPreparingDownload}
-            className="px-4 py-3 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+            className="px-3.5 py-2.5 sm:py-3 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-2xl font-bold text-xs transition flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
           >
-            <FileDown className="w-4 h-4" />
+            <FileDown className="w-4 h-4 shrink-0" />
             {isPreparingDownload ? 'Menyiapkan PDF...' : 'Unduh PDF'}
           </button>
 
@@ -1093,16 +1143,16 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
             type="button"
             onClick={handleOpenPrintPreview}
             disabled={!hasPrintableData}
-            className={`px-5 py-3 bg-gradient-to-r ${theme.gradient} hover:opacity-95 text-white rounded-2xl font-bold text-xs shadow-lg transition flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer`}
+            className={`col-span-2 sm:col-span-1 px-4 sm:px-5 py-2.5 sm:py-3 bg-gradient-to-r ${theme.gradient} hover:opacity-95 text-white rounded-2xl font-bold text-xs shadow-lg transition flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer`}
           >
-            <Printer className="w-4 h-4" /> Pratinjau, Atur Kop/TTD &amp; Cetak
+            <Printer className="w-4 h-4 shrink-0" /> Pratinjau, Atur Kop/TTD &amp; Cetak
           </button>
         </div>
       </div>
 
       {/* Step 1: Pilih Jenis Laporan */}
-      <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 space-y-3">
-        <div className="flex items-center justify-between">
+      <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-200 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
             <Layers className="w-4 h-4 text-indigo-600" /> 1. Pilih Format Laporan
           </h3>
@@ -1241,6 +1291,19 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                 </option>
               ))}
             </select>
+            {filterStudentId && (() => {
+              const picked = studentDropdownChoices.find((s) => s.id === filterStudentId);
+              if (!picked) return null;
+              return (
+                <div className="mt-1.5 flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200">
+                  <StudentAvatar student={picked} sizeClass="w-6 h-6" />
+                  <div className="min-w-0 leading-tight">
+                    <div className="text-[11px] font-bold text-indigo-900 truncate">{picked.name}</div>
+                    <div className="text-[10px] text-indigo-600 font-medium">{picked.class} • NIS {picked.nis}</div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           <div>
@@ -1294,7 +1357,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         </div>
 
         {/* Toggles for Photos */}
-        <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-3">
+        <div className="pt-2 border-t border-slate-100 grid grid-cols-1 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3">
           <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50/60 text-xs font-bold text-indigo-900 cursor-pointer">
             <input
               type="checkbox"
@@ -1321,7 +1384,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
             <input
               type="checkbox"
               checked={includePoints}
-              onChange={(e) => setIncludePoints(e.target.checked)}
+              onChange={(e) => handleToggleIncludePoints(e.target.checked)}
               className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
             />
             Tampilkan Poin di Cetak / PDF
@@ -1339,10 +1402,143 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         </div>
       </div>
 
-      {/* Step 3: Pratinjau Daftar Siswa & Foto Yang Akan Dicetak */}
+      {/* Step 3: Pengaturan Kop Surat, Spasi, TTD & Font Sebelum Pratinjau & Cetak */}
+      <div className="bg-white rounded-2xl shadow-sm border border-indigo-200 overflow-hidden">
+        <div className="p-4 sm:p-5 border-b border-indigo-100 bg-gradient-to-r from-indigo-50/80 via-white to-slate-50 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-indigo-600" />
+              3. Pengaturan Kop Surat, Spasi, TTD &amp; Font (Sebelum Pratinjau &amp; Cetak)
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Atur tampilan Kop Surat, spasi antar baris &amp; jarak bawah kop, tanda tangan Kepsek/Guru/Admin, perataan, dan font secara langsung sebelum membuka Pratinjau atau mengunduh PDF.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsPrePrintOpen((v) => !v)}
+            className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-bold text-slate-700 flex items-center gap-1.5 cursor-pointer"
+          >
+            {isPrePrintOpen ? (
+              <>
+                <ChevronUp className="w-3.5 h-3.5" /> Ciutkan Panel
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3.5 h-3.5" /> Buka Panel Kop &amp; TTD
+              </>
+            )}
+          </button>
+        </div>
+
+        {isPrePrintOpen && (
+          <div className="grid grid-cols-1 lg:grid-cols-12">
+            {/* Left: 3-Tab Configuration Panel */}
+            <div className="lg:col-span-5 xl:col-span-5 border-b lg:border-b-0 lg:border-r border-slate-200">
+              <PrintSettingsPanel
+                settings={printDraft}
+                onChange={handlePrintDraftChange}
+                appConfig={appConfig}
+                currentUser={currentUser}
+                users={users}
+                onSaveDefaultSettings={onSavePrintSettings}
+                showFooterActions
+                className="h-full max-h-[590px]"
+              />
+            </div>
+
+            {/* Right: Live Preview Kop Surat & TTD + Action Triggers */}
+            <div className="lg:col-span-7 xl:col-span-7 p-4 sm:p-5 bg-slate-50/70 flex flex-col justify-between gap-4">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-700 flex items-center gap-1.5">
+                    <Eye className="w-3.5 h-3.5" /> Pratinjau Langsung Kop Surat &amp; Blok TTD
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-500 bg-white px-2.5 py-0.5 rounded-full border border-slate-200">
+                    Spasi Kop: {(printDraft.kopStyle.lineSpacing ?? 1).toFixed(1)}x • Jarak Bawah:{' '}
+                    {printDraft.kopStyle.bottomSpacing ?? 6} mm
+                  </span>
+                </div>
+
+                {/* Live Paper Preview */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-6 space-y-5 overflow-x-auto">
+                  {printDraft.showKop ? (
+                    <div className="overflow-x-auto pb-1">
+                      <div className="min-w-[480px] sm:min-w-0">
+                        <KopSurat appConfig={appConfig} printSettings={printDraft} showBorder />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="py-4 px-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 text-center text-xs text-slate-400 font-semibold">
+                      Kop Surat dinonaktifkan pada cetakan dokumen ini.
+                    </div>
+                  )}
+
+                  {/* Miniature Body Placeholder */}
+                  <div
+                    className="py-2 text-center border-y border-dashed border-slate-200"
+                    style={{ fontFamily: getCssFontFamily(printDraft.documentFontFamily) }}
+                  >
+                    <div className="text-xs font-bold uppercase text-slate-800">
+                      {REPORT_TEMPLATES.find((t) => t.id === reportType)?.title || 'Pratinjau Isi Laporan'}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">
+                      {targetStudents.length} Siswa &bull; {targetViolations.length} Catatan &bull; Poin:{' '}
+                      {includePoints ? 'Ditampilkan' : 'Disembunyikan'}
+                    </div>
+                  </div>
+
+                  {/* Interactive Drag, Resize & Fast-Shift Signature Layout Editor */}
+                  <SignatureLayoutEditor
+                    settings={printDraft}
+                    onChange={setPrintDraft}
+                    appConfig={appConfig}
+                    currentUser={currentUser}
+                    usableWidthMm={orientation === 'landscape' ? 267 : 180}
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons Directly Under Preview */}
+              <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2 border-t border-slate-200/80">
+                <button
+                  type="button"
+                  onClick={handleExportExcel}
+                  disabled={!hasPrintableData}
+                  className="px-3.5 py-2.5 bg-white hover:bg-teal-50 text-teal-700 border border-teal-200 rounded-xl font-bold text-xs transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-2xs"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" /> Unduh XLS
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDirectDownloadPdf}
+                  disabled={!hasPrintableData || isPreparingDownload}
+                  className="px-4 py-2.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-xl font-bold text-xs transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-2xs"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  {isPreparingDownload ? 'Menyiapkan PDF...' : 'Unduh PDF Sekarang'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenPrintPreview}
+                  disabled={!hasPrintableData}
+                  className={`px-5 py-2.5 bg-gradient-to-r ${theme.gradient} hover:opacity-95 text-white rounded-xl font-bold text-xs shadow-md transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer`}
+                >
+                  <Printer className="w-3.5 h-3.5" /> Pratinjau PDF &amp; Cetak ({targetStudents.length} Siswa)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Step 4: Daftar Siswa & Foto Yang Akan Dicetak */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-4 sm:p-5 border-b border-slate-100 bg-slate-50/70 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
+            <h3 className="text-sm font-black text-slate-800 mr-1">
+              4. Daftar Siswa &amp; Foto:
+            </h3>
             <button
               type="button"
               onClick={toggleSelectAllStudents}
@@ -1473,6 +1669,14 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                             {formatBirthPlaceDate(stu.birthPlace, stu.birthDate, true)}
                           </div>
                           <div>
+                            <span className="font-semibold text-slate-700">Wali Kelas:</span>{' '}
+                            {stu.waliKelas || '-'}
+                          </div>
+                          <div>
+                            <span className="font-semibold text-slate-700">Guru BK:</span>{' '}
+                            {stu.guruBk || '-'}
+                          </div>
+                          <div>
                             <span className="font-semibold text-slate-700">Kontak:</span>{' '}
                             {getStudentPhone(stu) || '-'}
                           </div>
@@ -1568,7 +1772,11 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         onClose={() => setIsPrintModalOpen(false)}
         buildPdfDoc={buildReportPdfDoc}
         onSaveDefaultSettings={onSavePrintSettings}
-        defaultOverrides={{ showPoints: includePoints }}
+        defaultOverrides={printDraft}
+        onSettingsChange={(updated) => {
+          setPrintDraft(updated);
+          setIncludePoints(updated.showPoints !== false);
+        }}
       />
     </div>
   );

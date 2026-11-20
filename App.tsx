@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Toaster, toast } from 'sonner';
-import { INITIAL_VIOLATIONS, MOCK_STUDENTS, MOCK_USERS, INITIAL_VIOLATION_TYPES, THEMES, DEFAULT_APP_CONFIG, DEFAULT_LOGO_URL, DEFAULT_KOP_STYLE, DEFAULT_PRINT_SETTINGS, DEFAULT_SIGNATURE_STYLE } from './constants';
+import { INITIAL_VIOLATIONS, MOCK_STUDENTS, MOCK_USERS, INITIAL_VIOLATION_TYPES, THEMES, DEFAULT_APP_CONFIG, DEFAULT_LOGO_URL, DEFAULT_KOP_STYLE, DEFAULT_PRINT_SETTINGS, DEFAULT_SIGNATURE_STYLE, DEFAULT_KEPSEK_LAYOUT, DEFAULT_STAFF_LAYOUT } from './constants';
 import { Student, User, UserRole, ViolationRecord, ViolationType, ThemeName, AppTheme, AppConfig, UserActivityLog, ViolationCategory, PrintDocumentSettings, PrintFontFamily, PrintTextAlign, SignatureBoxPosition } from './types';
 import { INITIAL_ACTIVITIES } from './utils/activityLogger';
 import ViolationForm from './components/ViolationForm';
@@ -13,8 +13,9 @@ import EvidenceGallery from './components/EvidenceGallery';
 import ReportCenter from './components/ReportCenter';
 import { KopSurat } from './components/KopSurat';
 import { KopStyleEditor } from './components/KopStyleEditor';
+import { SignatureLayoutEditor } from './components/SignatureLayoutEditor';
 import AcademicYearManager from './components/AcademicYearManager';
-import { resolvePrintSettings } from './utils/pdfKop';
+import { clampSignatureLayout, positionToXPercent, PRINT_FONT_OPTIONS, resolvePrintSettings } from './utils/pdfKop';
 import {
   DEFAULT_ACADEMIC_YEARS,
   getRecordAcademicYear,
@@ -240,6 +241,8 @@ const App: React.FC = () => {
           showPoints: parsed.printSettings?.showPoints ?? DEFAULT_PRINT_SETTINGS.showPoints,
           kopStyle: {
             fontFamily: parsed.printSettings?.kopStyle?.fontFamily || DEFAULT_KOP_STYLE.fontFamily,
+            lineSpacing: parsed.printSettings?.kopStyle?.lineSpacing ?? DEFAULT_KOP_STYLE.lineSpacing,
+            bottomSpacing: parsed.printSettings?.kopStyle?.bottomSpacing ?? DEFAULT_KOP_STYLE.bottomSpacing,
             line1: { ...DEFAULT_KOP_STYLE.line1, ...(parsed.printSettings?.kopStyle?.line1 || {}) },
             line2: { ...DEFAULT_KOP_STYLE.line2, ...(parsed.printSettings?.kopStyle?.line2 || {}) },
             line3: { ...DEFAULT_KOP_STYLE.line3, ...(parsed.printSettings?.kopStyle?.line3 || {}) },
@@ -251,6 +254,14 @@ const App: React.FC = () => {
             ...DEFAULT_SIGNATURE_STYLE,
             ...(parsed.printSettings?.signatureStyle || {}),
           },
+          kepsekLayout: clampSignatureLayout(parsed.printSettings?.kepsekLayout, {
+            ...DEFAULT_KEPSEK_LAYOUT,
+            xPercent: positionToXPercent(parsed.printSettings?.kepsekPosition || DEFAULT_PRINT_SETTINGS.kepsekPosition),
+          }),
+          staffLayout: clampSignatureLayout(parsed.printSettings?.staffLayout, {
+            ...DEFAULT_STAFF_LAYOUT,
+            xPercent: positionToXPercent(parsed.printSettings?.staffPosition || DEFAULT_PRINT_SETTINGS.staffPosition),
+          }),
         };
         return {
           ...DEFAULT_APP_CONFIG,
@@ -419,6 +430,8 @@ const App: React.FC = () => {
               showPoints: remoteConfig.printSettings?.showPoints ?? DEFAULT_PRINT_SETTINGS.showPoints,
               kopStyle: {
                 fontFamily: remoteConfig.printSettings?.kopStyle?.fontFamily || DEFAULT_KOP_STYLE.fontFamily,
+                lineSpacing: remoteConfig.printSettings?.kopStyle?.lineSpacing ?? DEFAULT_KOP_STYLE.lineSpacing,
+                bottomSpacing: remoteConfig.printSettings?.kopStyle?.bottomSpacing ?? DEFAULT_KOP_STYLE.bottomSpacing,
                 line1: { ...DEFAULT_KOP_STYLE.line1, ...(remoteConfig.printSettings?.kopStyle?.line1 || {}) },
                 line2: { ...DEFAULT_KOP_STYLE.line2, ...(remoteConfig.printSettings?.kopStyle?.line2 || {}) },
                 line3: { ...DEFAULT_KOP_STYLE.line3, ...(remoteConfig.printSettings?.kopStyle?.line3 || {}) },
@@ -430,6 +443,14 @@ const App: React.FC = () => {
                 ...DEFAULT_SIGNATURE_STYLE,
                 ...(remoteConfig.printSettings?.signatureStyle || {}),
               },
+              kepsekLayout: clampSignatureLayout(remoteConfig.printSettings?.kepsekLayout, {
+                ...DEFAULT_KEPSEK_LAYOUT,
+                xPercent: positionToXPercent(remoteConfig.printSettings?.kepsekPosition || DEFAULT_PRINT_SETTINGS.kepsekPosition),
+              }),
+              staffLayout: clampSignatureLayout(remoteConfig.printSettings?.staffLayout, {
+                ...DEFAULT_STAFF_LAYOUT,
+                xPercent: positionToXPercent(remoteConfig.printSettings?.staffPosition || DEFAULT_PRINT_SETTINGS.staffPosition),
+              }),
             };
             const mergedConfig: AppConfig = {
               ...DEFAULT_APP_CONFIG,
@@ -1493,29 +1514,86 @@ const App: React.FC = () => {
   if (!currentUser) return <Login onLogin={handleLogin} users={users} appConfig={appConfig} />;
 
   return (
-    <div className={`min-h-screen bg-slate-100 flex flex-col md:flex-row print:bg-white font-sans text-slate-800 print:h-auto print:overflow-visible`}>
+    <div className={`min-h-screen bg-slate-100 flex flex-col lg:flex-row print:bg-white font-sans text-slate-800 print:h-auto print:overflow-visible`}>
       
-      {/* Mobile Header */}
-      <div className="md:hidden bg-white p-4 flex justify-between items-center shadow-sm z-20 sticky top-0 print:hidden border-b border-indigo-100">
-         <div className="flex items-center gap-3 font-bold text-slate-800">
-            <div className="w-9 h-9 p-1 bg-white rounded-xl border border-indigo-100 shadow-sm flex items-center justify-center">
+      {/* Mobile & Tablet Header (Hamburger menu on the left) */}
+      <header className="lg:hidden bg-white/95 backdrop-blur-md px-3 sm:px-5 h-14 flex items-center justify-between gap-2 shadow-sm z-20 sticky top-0 print:hidden border-b border-indigo-100 shrink-0">
+         <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              aria-label={sidebarOpen ? 'Tutup menu navigasi' : 'Buka menu navigasi'}
+              className={`min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 text-${currentTheme.primary}-600 bg-${currentTheme.primary}-50 hover:bg-${currentTheme.primary}-100 active:scale-95 rounded-xl transition cursor-pointer shrink-0`}
+            >
+              {sidebarOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+            <div className="w-8 h-8 sm:w-9 sm:h-9 p-1 bg-white rounded-xl border border-indigo-100 shadow-2xs flex items-center justify-center shrink-0">
                <img src={appConfig.logoUrl} alt="Logo" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
             </div>
-            <span className={`text-sm bg-gradient-to-r ${currentTheme.gradient} bg-clip-text text-transparent font-black`}>{appConfig.schoolName}</span>
+            <div className="min-w-0">
+               <span className={`text-sm sm:text-base bg-gradient-to-r ${currentTheme.gradient} bg-clip-text text-transparent font-black block truncate leading-tight`}>
+                 {appConfig.schoolName}
+               </span>
+               <span className="hidden sm:block text-[10px] font-bold text-slate-400 truncate leading-tight">
+                 {appConfig.appName} • {
+                   activeTab === 'dashboard' ? 'Dashboard' :
+                   activeTab === 'input' ? 'Input Laporan' :
+                   activeTab === 'students' ? 'Data Siswa' :
+                   activeTab === 'evidence' ? 'Bukti Foto' :
+                   activeTab === 'reports' ? 'Cetak Laporan' : 'Pengaturan'
+                 }
+               </span>
+            </div>
          </div>
-         <button onClick={() => setSidebarOpen(!sidebarOpen)} className={`p-2 text-${currentTheme.primary}-600 bg-${currentTheme.primary}-50 rounded-lg`}>
-            <Menu className="w-6 h-6" />
-         </button>
-      </div>
+
+         <div className="flex items-center gap-2 shrink-0">
+            <select
+              value={selectedAcademicYear}
+              onChange={(e) => handleSelectViewingYear(e.target.value)}
+              aria-label="Pilih Tahun Ajaran"
+              className={`hidden sm:block px-2.5 py-1.5 rounded-xl border text-xs font-bold cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                selectedAcademicYear !== appConfig.academicYear
+                  ? 'bg-amber-50 border-amber-300 text-amber-800'
+                  : 'bg-slate-50 border-slate-200 text-slate-700'
+              }`}
+            >
+              {availableAcademicYears.map(y => (
+                <option key={y} value={y}>
+                  TA {y}{y === appConfig.academicYear ? ' (Aktif)' : ''}
+                </option>
+              ))}
+              <option value="ALL">Semua TA</option>
+            </select>
+
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={isSyncing}
+              title="Sinkronkan dengan Cloud Firestore"
+              className="min-w-[40px] min-h-[40px] px-2 sm:px-3 py-1.5 rounded-xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center gap-1.5 text-xs font-bold transition cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span className="hidden md:inline text-[11px]">{isSyncing ? 'Sinkron...' : 'Sinkron'}</span>
+            </button>
+         </div>
+      </header>
 
       {/* Sidebar / Navigation */}
       <aside className={`
-        fixed inset-y-0 left-0 z-30 w-64 bg-white border-r flex flex-col transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:h-screen
+        fixed inset-y-0 left-0 z-30 w-72 sm:w-64 bg-white border-r flex flex-col transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-dvh shrink-0
         ${sidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}
         ${currentTheme.sidebar}
         print:hidden
       `}>
-        <div className={`p-6 border-b border-${currentTheme.primary}-50 flex flex-col items-center text-center gap-3 bg-gradient-to-b from-${currentTheme.primary}-50/50 to-white`}>
+        <div className={`relative p-5 sm:p-6 border-b border-${currentTheme.primary}-50 flex flex-col items-center text-center gap-3 bg-gradient-to-b from-${currentTheme.primary}-50/50 to-white`}>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Tutup menu"
+            className="lg:hidden absolute top-3 right-3 w-9 h-9 rounded-xl bg-white/80 hover:bg-slate-100 border border-slate-200 text-slate-500 flex items-center justify-center transition cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
           <div className={`p-1 bg-gradient-to-tr ${currentTheme.gradient} rounded-2xl shadow-md`}>
             <div className="p-1.5 bg-white rounded-[0.9rem]">
                <img src={appConfig.logoUrl} alt="Logo" className="w-14 h-14 object-contain" referrerPolicy="no-referrer" />
@@ -1626,8 +1704,8 @@ const App: React.FC = () => {
              </button>
           )}
 
-          {/* Mobile / Sidebar Academic Year Switcher */}
-          <div className="mt-6 pt-4 border-t border-slate-100 px-3 md:hidden">
+          {/* Mobile / Tablet Sidebar Academic Year Switcher */}
+          <div className="mt-6 pt-4 border-t border-slate-100 px-3 lg:hidden">
              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
                <Calendar className="w-3 h-3" /> Filter Tahun Ajaran
              </label>
@@ -1687,29 +1765,29 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* Overlay for mobile sidebar */}
-      {sidebarOpen && <div className="fixed inset-0 bg-black/20 z-20 md:hidden" onClick={() => setSidebarOpen(false)}></div>}
+      {/* Overlay for mobile & tablet sidebar */}
+      {sidebarOpen && <div className="fixed inset-0 bg-black/30 backdrop-blur-[1px] z-20 lg:hidden" onClick={() => setSidebarOpen(false)}></div>}
 
       {/* Main Content */}
-      <main className={`flex-1 p-4 md:p-8 overflow-y-auto h-[calc(100vh-64px)] md:h-screen print:h-auto print:overflow-visible print:p-0 bg-slate-50/50 relative ${selectedStudent ? 'print:hidden' : 'print:block'}`}>
+      <main className={`flex-1 min-w-0 p-3 sm:p-5 lg:p-8 overflow-y-auto overflow-x-hidden h-[calc(100dvh-56px)] lg:h-dvh print:h-auto print:overflow-visible print:p-0 bg-slate-50/50 relative ${selectedStudent ? 'print:hidden' : 'print:block'}`}>
         {/* Background decorations - Themed */}
         <div className={`absolute top-0 left-0 w-full h-64 bg-gradient-to-r ${currentTheme.gradient} opacity-10 -z-10 print:hidden`}></div>
 
-        <div className="max-w-7xl mx-auto print:max-w-none space-y-8 relative z-0 print:space-y-0">
+        <div className="max-w-7xl mx-auto print:max-w-none space-y-5 sm:space-y-7 relative z-0 print:space-y-0">
           
           {/* Header Title Dynamic */}
-          <div className="print:hidden mb-6 flex justify-between items-end">
-             <div>
-               <h2 className="text-3xl font-black text-slate-800 tracking-tight">{
+          <div className="print:hidden mb-3 sm:mb-6 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-2">
+             <div className="min-w-0">
+               <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-slate-800 tracking-tight truncate">{
                   activeTab === 'dashboard' ? 'Dashboard Overview' :
                   activeTab === 'input' ? 'Input Data Pelanggaran' :
                   activeTab === 'students' ? 'Direktori Siswa' : 
                   activeTab === 'evidence' ? 'Galeri & Unduh Bukti Foto' :
                   activeTab === 'reports' ? 'Pusat Cetak Laporan & Foto' : 'Pengaturan Sistem'
                }</h2>
-               <p className="text-slate-500 text-sm mt-1 font-medium">Selamat datang, <span className={`text-${currentTheme.primary}-600`}>{currentUser.name}</span></p>
+               <p className="text-slate-500 text-xs sm:text-sm mt-0.5 sm:mt-1 font-medium">Selamat datang, <span className={`text-${currentTheme.primary}-600`}>{currentUser.name}</span></p>
              </div>
-             <div className="hidden md:flex items-center gap-3 text-right">
+             <div className="hidden lg:flex items-center gap-3 text-right">
                 {/* Cloud Connection Badge */}
                 <button
                    onClick={handleManualSync}
@@ -2133,6 +2211,7 @@ const App: React.FC = () => {
                                         </p>
                                       </div>
                                       <KopStyleEditor
+                                        appConfig={tempConfig}
                                         kopStyle={resolvedPrint.kopStyle}
                                         onChange={(updatedKopStyle) =>
                                           updateTempPrint({ kopStyle: updatedKopStyle })
@@ -2200,9 +2279,21 @@ const App: React.FC = () => {
                                             }
                                             className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
                                           >
-                                            <option value="helvetica">Helvetica / Arial</option>
-                                            <option value="times">Times New Roman</option>
-                                            <option value="courier">Courier New</option>
+                                            <optgroup label="Sans-Serif Persuratan Modern">
+                                              {PRINT_FONT_OPTIONS.filter((f) => f.category === 'sans').map((opt) => (
+                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                              ))}
+                                            </optgroup>
+                                            <optgroup label="Serif Surat Dinas Resmi">
+                                              {PRINT_FONT_OPTIONS.filter((f) => f.category === 'serif').map((opt) => (
+                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                              ))}
+                                            </optgroup>
+                                            <optgroup label="Monospace / Arsip">
+                                              {PRINT_FONT_OPTIONS.filter((f) => f.category === 'mono').map((opt) => (
+                                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                              ))}
+                                            </optgroup>
                                           </select>
                                         </div>
                                         <div>
@@ -2211,9 +2302,16 @@ const App: React.FC = () => {
                                           </label>
                                           <select
                                             value={resolvedPrint.kepsekPosition}
-                                            onChange={(e) =>
-                                              updateTempPrint({ kepsekPosition: e.target.value as SignatureBoxPosition })
-                                            }
+                                            onChange={(e) => {
+                                              const pos = e.target.value as SignatureBoxPosition;
+                                              updateTempPrint({
+                                                kepsekPosition: pos,
+                                                kepsekLayout: {
+                                                  ...clampSignatureLayout(resolvedPrint.kepsekLayout, DEFAULT_KEPSEK_LAYOUT),
+                                                  xPercent: positionToXPercent(pos),
+                                                },
+                                              });
+                                            }}
                                             className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
                                           >
                                             <option value="left">Kiri</option>
@@ -2227,9 +2325,16 @@ const App: React.FC = () => {
                                           </label>
                                           <select
                                             value={resolvedPrint.staffPosition}
-                                            onChange={(e) =>
-                                              updateTempPrint({ staffPosition: e.target.value as SignatureBoxPosition })
-                                            }
+                                            onChange={(e) => {
+                                              const pos = e.target.value as SignatureBoxPosition;
+                                              updateTempPrint({
+                                                staffPosition: pos,
+                                                staffLayout: {
+                                                  ...clampSignatureLayout(resolvedPrint.staffLayout, DEFAULT_STAFF_LAYOUT),
+                                                  xPercent: positionToXPercent(pos),
+                                                },
+                                              });
+                                            }}
                                             className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
                                           >
                                             <option value="left">Kiri</option>
@@ -2260,6 +2365,25 @@ const App: React.FC = () => {
                                           </select>
                                         </div>
                                       </div>
+
+                                      {currentUser && (
+                                        <div className="pt-2">
+                                          <SignatureLayoutEditor
+                                            compact
+                                            settings={resolvedPrint}
+                                            onChange={(updater) => {
+                                              isEditingConfigRef.current = true;
+                                              setTempConfig((prev) => {
+                                                const cur = resolvePrintSettings(prev, currentUser, users);
+                                                const next = typeof updater === 'function' ? updater(cur) : updater;
+                                                return { ...prev, printSettings: next };
+                                              });
+                                            }}
+                                            appConfig={tempConfig}
+                                            currentUser={currentUser}
+                                          />
+                                        </div>
+                                      )}
                                     </div>
                                   </>
                                 );

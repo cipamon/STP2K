@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Student, ViolationRecord, ViolationCategory, AppConfig, User, PrintDocumentSettings } from '../types';
-import { X, User as UserIcon, Trophy, AlertTriangle, Calendar, Award, Printer, ArrowDownCircle, Clock, BellRing, Volume2, FileText, Image as ImageIcon, ExternalLink, Phone, Mail, MapPin, Hash, ShieldCheck, FileSpreadsheet, FileDown } from 'lucide-react';
+import { X, User as UserIcon, Trophy, AlertTriangle, Calendar, Award, Printer, ArrowDownCircle, Clock, BellRing, Volume2, FileText, Image as ImageIcon, ExternalLink, Phone, Mail, MapPin, Hash, ShieldCheck, FileSpreadsheet, FileDown, Sliders } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getStudentTardinessInfo, buildTardinessLetterPdfDoc, playAlarmSound, isTardinessRecord } from '../utils/tardiness';
 import { KopSurat } from './KopSurat';
-import { drawPdfKopSurat, drawPdfSignatures, resolvePrintSettings } from '../utils/pdfKop';
+import { SignatureLayoutEditor } from './SignatureLayoutEditor';
+import { drawPdfKopSurat, drawPdfSignatures, getPdfFontFamily, resolvePrintSettings } from '../utils/pdfKop';
 import PrintPreviewModal from './PrintPreviewModal';
+import PrintSettingsPanel from './PrintSettingsPanel';
 import {
   formatBirthPlaceDate,
   getStatusBadgeClasses,
@@ -17,6 +19,7 @@ import {
 } from '../utils/studentHelpers';
 import { getDefaultStudentAvatar } from '../utils/avatarHelpers';
 import { exportAoaToSpreadsheet } from '../utils/exportHelpers';
+import { loadStudentPdfPhoto } from '../utils/pdfImages';
 
 interface StudentDetailModalProps {
   student: Student;
@@ -32,6 +35,14 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
   const [printModalMode, setPrintModalMode] = useState<null | 'detail' | 'tardinessLetter'>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<'all' | 'tardiness'>('all');
+  const [showPrePrintPanel, setShowPrePrintPanel] = useState(false);
+  const [draftPrintSettings, setDraftPrintSettings] = useState<PrintDocumentSettings>(() =>
+    resolvePrintSettings(appConfig, currentUser, users)
+  );
+
+  useEffect(() => {
+    setDraftPrintSettings(resolvePrintSettings(appConfig, currentUser, users));
+  }, [appConfig, currentUser, users]);
 
   const handleDownloadImage = async (url: string) => {
     try {
@@ -95,7 +106,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
   const buildStudentDetailPdfDoc = async (customSettings?: PrintDocumentSettings) => {
     const settings = customSettings || resolvePrintSettings(appConfig, currentUser, users);
     const showPoints = settings.showPoints !== false;
-    const font = settings.documentFontFamily || 'helvetica';
+    const font = getPdfFontFamily(settings.documentFontFamily);
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     
@@ -110,19 +121,40 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
     const studentPhone = getStudentPhone(student);
     const studentStatus = getStudentStatus(student);
     const studentTtl = formatBirthPlaceDate(student.birthPlace, student.birthDate);
+    const studentPhoto = await loadStudentPdfPhoto(student);
 
-    // Student Info
+    // Student Info + Foto Siswa
     doc.setFontSize(10);
     doc.text("BIODATA SISWA", 15, currentY + 15);
+
+    const textX = studentPhoto ? 41 : 15;
+    if (studentPhoto) {
+      const photoX = 15;
+      const photoY = currentY + 19;
+      const photoW = 22;
+      const photoH = 28;
+      try {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(photoX - 0.6, photoY - 0.6, photoW + 1.2, photoH + 1.2, 'F');
+        doc.addImage(studentPhoto.dataUrl, studentPhoto.format, photoX, photoY, photoW, photoH);
+        doc.setDrawColor(203, 213, 225);
+        doc.rect(photoX - 0.6, photoY - 0.6, photoW + 1.2, photoH + 1.2, 'S');
+      } catch {
+        // ignore
+      }
+    }
+
+    const bioMaxW = pageWidth - textX - 15;
     doc.setFontSize(9);
     doc.setFont(font, 'normal');
-    doc.text(`Nama Lengkap  : ${student.name}`, 15, currentY + 21);
-    doc.text(`NIS / NISN    : ${student.nis} / ${student.nisn || '-'}`, 15, currentY + 26);
-    doc.text(`Kelas / Absen : ${student.class} / No. Absen ${student.absenNumber || '-'}`, 15, currentY + 31);
-    doc.text(`Jenis Kelamin : ${student.gender === 'L' ? 'Laki-laki' : 'Perempuan'} | Status: ${studentStatus}`, 15, currentY + 36);
-    doc.text(`Tempat, Tgl Lhr: ${studentTtl}`, 15, currentY + 41);
-    doc.text(`No. HP / Email : ${studentPhone || '-'} / ${student.email || '-'}`, 15, currentY + 46);
-    doc.text(`Alamat        : ${student.address || '-'}`, 15, currentY + 51, { maxWidth: pageWidth - 30 });
+    doc.text(`Nama Lengkap   : ${student.name}`, textX, currentY + 21, { maxWidth: showPoints ? bioMaxW - 35 : bioMaxW });
+    doc.text(`NIS / NISN     : ${student.nis} / ${student.nisn || '-'}`, textX, currentY + 26, { maxWidth: bioMaxW });
+    doc.text(`Kelas / Absen  : ${student.class} / No. Absen ${student.absenNumber || '-'}`, textX, currentY + 31, { maxWidth: bioMaxW });
+    doc.text(`Wali Kelas     : ${student.waliKelas || '-'} | Guru BK: ${student.guruBk || '-'}`, textX, currentY + 36, { maxWidth: bioMaxW });
+    doc.text(`Jenis Kelamin  : ${student.gender === 'L' ? 'Laki-laki' : 'Perempuan'} | Status: ${studentStatus}`, textX, currentY + 41, { maxWidth: bioMaxW });
+    doc.text(`Tempat, Tgl Lhr: ${studentTtl}`, textX, currentY + 46, { maxWidth: bioMaxW });
+    doc.text(`No. HP / Email : ${studentPhone || '-'} / ${student.email || '-'}`, textX, currentY + 51, { maxWidth: bioMaxW });
+    doc.text(`Alamat         : ${student.address || '-'}`, textX, currentY + 56, { maxWidth: bioMaxW });
     
     if (showPoints) {
       doc.setFontSize(11);
@@ -156,7 +188,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
     }
 
     autoTable(doc, {
-      startY: currentY + 60,
+      startY: currentY + 65,
       head: headers,
       body: body,
       theme: 'grid',
@@ -178,8 +210,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
 
   const handleDirectDownloadPdf = async () => {
     try {
-      const settings = resolvePrintSettings(appConfig, currentUser, users);
-      const doc = await buildStudentDetailPdfDoc(settings);
+      const doc = await buildStudentDetailPdfDoc(draftPrintSettings);
       doc.save(`SIPERSIS_Siswa_${student.name.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`);
       toast.success("PDF riwayat siswa berhasil diunduh.");
     } catch (error) {
@@ -196,6 +227,8 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
       ['Nama Lengkap', student.name],
       ['NIS / NISN', `${student.nis} / ${student.nisn || '-'}`],
       ['Kelas / No Absen', `${student.class} / ${student.absenNumber || '-'}`],
+      ['Wali Kelas', student.waliKelas || '-'],
+      ['Guru BK', student.guruBk || '-'],
       ['Jenis Kelamin', student.gender === 'L' ? 'Laki-laki' : 'Perempuan'],
       ['Tempat, Tanggal Lahir', formatBirthPlaceDate(student.birthPlace, student.birthDate)],
       ['No. HP / Email', `${getStudentPhone(student) || '-'} / ${student.email || '-'}`],
@@ -222,14 +255,18 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200 print:p-0 print:bg-white print:static print:block">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-2 sm:p-4 animate-in fade-in duration-200 print:p-0 print:bg-white print:static print:block">
       
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col print:shadow-none print:max-w-none print:max-h-none print:rounded-none print:h-auto print:overflow-visible">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[94dvh] sm:max-h-[90vh] overflow-hidden flex flex-col print:shadow-none print:max-w-none print:max-h-none print:rounded-none print:h-auto print:overflow-visible">
         
         {/* Screen Header (Hidden on Print) */}
-        <div className="bg-gradient-to-r from-indigo-600 to-blue-500 p-6 flex justify-between items-start text-white shrink-0 print:hidden">
-          <div className="flex items-center gap-6">
-            <div className="relative">
+        <div className="relative bg-gradient-to-r from-indigo-600 to-blue-500 p-4 sm:p-6 flex flex-col md:flex-row justify-between items-stretch md:items-start gap-4 text-white shrink-0 print:hidden">
+          <button onClick={onClose} className="md:hidden absolute top-3 right-3 bg-white/15 hover:bg-white/25 p-2 rounded-full transition-colors cursor-pointer" title="Tutup">
+            <X className="w-5 h-5" />
+          </button>
+
+          <div className="flex items-center gap-3.5 sm:gap-5 pr-10 md:pr-0 min-w-0">
+            <div className="relative shrink-0">
                 <button
                   type="button"
                   onClick={() => setPreviewImage(getStudentPhoto(student))}
@@ -245,7 +282,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                         e.currentTarget.src = fallback;
                       }
                     }}
-                    className="w-24 h-24 rounded-full object-cover border-4 border-white/30 shadow-lg group-hover:opacity-90 transition" 
+                    className="w-16 h-16 sm:w-20 sm:h-20 md:w-24 md:h-24 rounded-full object-cover border-4 border-white/30 shadow-lg group-hover:opacity-90 transition" 
                     referrerPolicy="no-referrer"
                   />
                   <span className="absolute inset-0 rounded-full bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-[10px] font-bold text-white transition">
@@ -253,60 +290,72 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                   </span>
                 </button>
               {student.totalPoints < 0 && (
-                <div className="absolute -bottom-2 -right-2 bg-yellow-400 text-yellow-900 p-1.5 rounded-full shadow-md border-2 border-white">
-                  <Trophy className="w-5 h-5" />
+                <div className="absolute -bottom-1.5 -right-1.5 bg-yellow-400 text-yellow-900 p-1 sm:p-1.5 rounded-full shadow-md border-2 border-white">
+                  <Trophy className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
               )}
             </div>
             
-            <div>
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <h2 className="text-2xl font-bold">{student.name}</h2>
-                <span className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold border ${getStatusBadgeClasses(getStudentStatus(student))}`}>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-lg sm:text-xl md:text-2xl font-bold leading-tight break-words">{student.name}</h2>
+                <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold border ${getStatusBadgeClasses(getStudentStatus(student))}`}>
                   {getStudentStatus(student)}
                 </span>
               </div>
-              <div className="flex flex-wrap gap-2 mt-2 text-blue-50">
-                <span className="bg-white/20 px-3 py-1 rounded-lg text-xs backdrop-blur-sm font-mono">NIS: {student.nis}</span>
-                <span className="bg-white/20 px-3 py-1 rounded-lg text-xs backdrop-blur-sm font-mono">NISN: {student.nisn || '-'}</span>
-                <span className="bg-white/20 px-3 py-1 rounded-lg text-xs backdrop-blur-sm font-bold">{student.class}</span>
-                <span className="bg-white/20 px-3 py-1 rounded-lg text-xs backdrop-blur-sm font-bold">Absen: {student.absenNumber || '-'}</span>
-                <span className={`bg-white/20 px-3 py-1 rounded-lg text-xs backdrop-blur-sm font-bold border ${student.gender === 'P' ? 'border-pink-300 text-pink-100' : 'border-blue-300'}`}>
+              <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2 text-blue-50">
+                <span className="bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-mono">NIS: {student.nis}</span>
+                <span className="bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-mono">NISN: {student.nisn || '-'}</span>
+                <span className="bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-bold">{student.class}</span>
+                <span className="bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-bold">Absen: {student.absenNumber || '-'}</span>
+                <span className={`bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-bold border ${student.gender === 'P' ? 'border-pink-300 text-pink-100' : 'border-blue-300'}`}>
                     {student.gender === 'L' ? 'Laki-laki' : 'Perempuan'}
                 </span>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-col items-end gap-3">
-             <div className="flex flex-wrap justify-end gap-2">
+          <div className="flex flex-col sm:flex-row md:flex-col items-stretch sm:items-center md:items-end justify-between gap-2.5 sm:gap-3 shrink-0">
+             <div className="flex flex-wrap items-center justify-start md:justify-end gap-1.5 sm:gap-2">
                <button 
                   onClick={handleDownloadXls} 
-                  className="bg-white/20 hover:bg-white/30 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border border-white/20 cursor-pointer"
+                  className="bg-white/20 hover:bg-white/30 text-white px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border border-white/20 cursor-pointer"
                   title="Unduh biodata dan riwayat ke file XLS"
                >
-                 <FileSpreadsheet className="w-4 h-4" /> Unduh XLS
+                 <FileSpreadsheet className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Unduh XLS
+               </button>
+               <button 
+                  type="button"
+                  onClick={() => setShowPrePrintPanel((v) => !v)} 
+                  className={`px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border cursor-pointer ${
+                    showPrePrintPanel
+                      ? 'bg-white text-indigo-700 border-white'
+                      : 'bg-white/20 hover:bg-white/30 text-white border-white/20'
+                  }`}
+                  title="Atur Kop Surat, Spasi, TTD & Font sebelum Pratinjau atau Cetak"
+               >
+                 <Sliders className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Atur Kop &amp; TTD
                </button>
                <button 
                   onClick={handleDirectDownloadPdf} 
-                  className="bg-white/20 hover:bg-white/30 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border border-white/20 cursor-pointer"
+                  className="bg-white/20 hover:bg-white/30 text-white px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border border-white/20 cursor-pointer"
                   title="Unduh langsung laporan ke PDF"
                >
-                 <FileDown className="w-4 h-4" /> Unduh PDF
+                 <FileDown className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Unduh PDF
                </button>
                <button 
                   onClick={handlePrint} 
-                  className="bg-white/20 hover:bg-white/30 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border border-white/20 cursor-pointer"
+                  className="bg-white/20 hover:bg-white/30 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border border-white/20 cursor-pointer"
                >
-                 <Printer className="w-4 h-4" /> Cetak PDF
+                 <Printer className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Cetak PDF
                </button>
-               <button onClick={onClose} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition-colors cursor-pointer" title="Tutup">
+               <button onClick={onClose} className="hidden md:flex bg-white/10 hover:bg-white/20 p-2 rounded-full transition-colors cursor-pointer" title="Tutup">
                  <X className="w-5 h-5" />
                </button>
              </div>
-             <div className="bg-white text-indigo-900 px-4 py-2 rounded-xl shadow-lg text-center min-w-[100px]">
-                <p className="text-xs font-bold uppercase tracking-wider text-indigo-400">Total Poin</p>
-                <p className={`text-2xl font-extrabold ${student.totalPoints > 50 ? 'text-red-600' : student.totalPoints < 0 ? 'text-green-600' : 'text-indigo-900'}`}>
+             <div className="bg-white text-indigo-900 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl shadow-lg text-center flex md:block items-center justify-between gap-2 min-w-[100px]">
+                <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-indigo-400">Total Poin</p>
+                <p className={`text-xl sm:text-2xl font-extrabold ${student.totalPoints > 50 ? 'text-red-600' : student.totalPoints < 0 ? 'text-green-600' : 'text-indigo-900'}`}>
                   {student.totalPoints}
                 </p>
              </div>
@@ -357,7 +406,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
 
         {/* KOP SURAT (Visible only on print) */}
         <div className="hidden print:block p-8">
-          <KopSurat appConfig={appConfig} showBorder={true} />
+          <KopSurat appConfig={appConfig} showBorder={true} printSettings={draftPrintSettings} />
         </div>
 
         {/* Print Content Header */}
@@ -372,7 +421,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                 <table className="text-sm font-medium">
                    <tbody>
                       <tr>
-                         <td className="w-32 py-0.5">Nama Lengkap</td>
+                         <td className="w-36 py-0.5">Nama Lengkap</td>
                          <td className="w-4">:</td>
                          <td className="uppercase font-bold">{student.name}</td>
                       </tr>
@@ -380,6 +429,16 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                          <td className="py-0.5">Kelas</td>
                          <td>:</td>
                          <td>{student.class} ({student.gender === 'L' ? 'Laki-laki' : 'Perempuan'})</td>
+                      </tr>
+                      <tr>
+                         <td className="py-0.5">Wali Kelas</td>
+                         <td>:</td>
+                         <td>{student.waliKelas || '-'}</td>
+                      </tr>
+                      <tr>
+                         <td className="py-0.5">Guru BK</td>
+                         <td>:</td>
+                         <td>{student.guruBk || '-'}</td>
                       </tr>
                       <tr>
                          <td className="py-0.5">NIS / NISN</td>
@@ -421,6 +480,61 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
 
         {/* Content List */}
         <div className="p-6 overflow-y-auto bg-slate-50 flex-1 print:bg-white print:p-8 print:overflow-visible">
+          {/* Pre-Print Settings Panel (Shown before clicking Pratinjau / Cetak / Unduh PDF) */}
+          {showPrePrintPanel && (
+            <div className="mb-6 bg-white rounded-2xl border border-indigo-200 p-4 grid grid-cols-1 lg:grid-cols-12 gap-4 shadow-sm print:hidden">
+              <div className="lg:col-span-5">
+                <PrintSettingsPanel
+                  settings={draftPrintSettings}
+                  onChange={setDraftPrintSettings}
+                  appConfig={appConfig}
+                  currentUser={currentUser}
+                  users={users}
+                  onSaveDefaultSettings={onSavePrintSettings}
+                  showFooterActions
+                  className="rounded-xl border border-slate-200 max-h-[430px]"
+                />
+              </div>
+              <div className="lg:col-span-7 flex flex-col justify-between gap-3">
+                <div className="bg-slate-50 rounded-xl border border-slate-200 p-3.5 overflow-x-auto space-y-3">
+                  <div className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-700">
+                    Pratinjau Kop Surat, Spasi &amp; TTD Sebelum Cetak
+                  </div>
+                  {draftPrintSettings.showKop ? (
+                    <div className="min-w-[480px] sm:min-w-0">
+                      <KopSurat appConfig={appConfig} printSettings={draftPrintSettings} showBorder />
+                    </div>
+                  ) : (
+                    <div className="py-3 text-center text-xs text-slate-400">Kop Surat dinonaktifkan.</div>
+                  )}
+                  <SignatureLayoutEditor
+                    compact
+                    settings={draftPrintSettings}
+                    onChange={setDraftPrintSettings}
+                    appConfig={appConfig}
+                    currentUser={currentUser}
+                  />
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDirectDownloadPdf}
+                    className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <FileDown className="w-3.5 h-3.5" /> Unduh PDF
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePrint}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" /> Buka Pratinjau &amp; Cetak
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Structured Biodata Card (Screen Only) */}
           <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6 shadow-xs print:hidden">
             <h3 className="text-xs font-extrabold uppercase tracking-wider text-indigo-700 mb-3 flex items-center gap-1.5">
@@ -445,6 +559,14 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                 </div>
               </div>
               <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
+                <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><UserIcon className="w-3 h-3" /> Wali Kelas</div>
+                <div className="font-bold text-slate-800 mt-0.5">{student.waliKelas || '-'}</div>
+              </div>
+              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
+                <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><UserIcon className="w-3 h-3" /> Guru BK</div>
+                <div className="font-bold text-slate-800 mt-0.5">{student.guruBk || '-'}</div>
+              </div>
+              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
                 <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><Calendar className="w-3 h-3" /> Tempat, Tanggal Lahir</div>
                 <div className="font-bold text-slate-800 mt-0.5">{formatBirthPlaceDate(student.birthPlace, student.birthDate)}</div>
               </div>
@@ -456,7 +578,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                 <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><Mail className="w-3 h-3" /> Email</div>
                 <div className="font-semibold text-slate-800 mt-0.5 truncate" title={student.email || '-'}>{student.email || '-'}</div>
               </div>
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100 sm:col-span-2 lg:col-span-3">
+              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
                 <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><MapPin className="w-3 h-3" /> Alamat Lengkap</div>
                 <div className="font-medium text-slate-800 mt-0.5">{student.address || '-'}</div>
               </div>
@@ -643,6 +765,8 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
         users={users}
         onClose={() => setPrintModalMode(null)}
         onSaveDefaultSettings={onSavePrintSettings}
+        defaultOverrides={draftPrintSettings}
+        onSettingsChange={setDraftPrintSettings}
         buildPdfDoc={async (settings) => {
           if (printModalMode === 'tardinessLetter') {
             return buildTardinessLetterPdfDoc(student, tardinessInfo, appConfig, currentUser, settings);

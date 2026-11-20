@@ -3,10 +3,9 @@ import { toast } from 'sonner';
 import { Student, User, ViolationCategory, ViolationRecord, ViolationType, AppConfig } from '../types';
 import { CLASS_LIST } from '../constants';
 import { analyzeViolationText } from '../services/geminiService';
-import { Sparkles, Camera, Upload, CheckCircle, User as UserIcon, AlertCircle, Award, RotateCcw, ImagePlus, X, FileDown, Table, Images, Check } from 'lucide-react';
+import { Sparkles, Camera, Upload, CheckCircle, AlertCircle, Award, RotateCcw, ImagePlus, X, FileDown, Table, Check } from 'lucide-react';
 import CameraModal from './CameraModal';
 import * as XLSX from 'xlsx';
-import { getEvidenceImageForViolation, EVIDENCE_PRESETS } from '../utils/evidenceImages';
 import { isGoogleSpreadsheetUrl } from '../utils/webhook';
 import { getStudentPhoto } from '../utils/studentHelpers';
 import { getDefaultStudentAvatar } from '../utils/avatarHelpers';
@@ -254,9 +253,9 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
 
   return (
     <>
-      <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-100 max-w-4xl mx-auto">
+      <div className="bg-white p-4 sm:p-6 rounded-xl shadow-lg border border-slate-100 max-w-4xl mx-auto">
         {/* Header - Dynamically colored by parent context/css generally, but hardcoded blue here for form consistency */}
-        <div className="bg-gradient-to-r from-blue-700 to-blue-500 -m-6 mb-6 p-6 rounded-t-xl text-white shadow-md flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <div className="bg-gradient-to-r from-blue-700 to-blue-500 -m-4 sm:-m-6 mb-5 sm:mb-6 p-4 sm:p-6 rounded-t-xl text-white shadow-md flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl font-bold flex items-center gap-2">
@@ -563,41 +562,8 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
                </label>
             </div>
 
-            {/* Quick Preset Selector */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-slate-600 flex items-center gap-1">
-                  <Images className="w-3.5 h-3.5 text-blue-600" />
-                  Pilih Cepat Foto Bukti Sesuai Pelanggaran:
-                </span>
-                <span className="text-[10px] text-slate-400">Klik untuk pasang foto</span>
-              </div>
-              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
-                {EVIDENCE_PRESETS.slice(0, 8).map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => setImagePreview(preset.url)}
-                    className={`flex-shrink-0 flex items-center gap-1.5 p-1.5 rounded-lg border text-left transition-all ${
-                      imagePreview === preset.url
-                        ? 'border-blue-500 bg-blue-100 ring-2 ring-blue-400 text-blue-900'
-                        : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
-                    }`}
-                  >
-                    <img
-                      src={preset.url}
-                      alt={preset.title}
-                      className="w-8 h-8 rounded object-cover"
-                      referrerPolicy="no-referrer"
-                    />
-                    <span className="text-xs font-medium whitespace-nowrap pr-1">{preset.title}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {/* Preview Area */}
-            {imagePreview ? (
+            {imagePreview && (
               <div className="mt-3 relative w-full h-64 bg-slate-900 rounded-xl overflow-hidden border-2 border-blue-400 shadow-sm">
                 <img src={imagePreview} alt="Bukti" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                 <button 
@@ -620,13 +586,6 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
                      Hapus / Batal Pasang Foto
                    </button>
                 </div>
-              </div>
-            ) : (
-              <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl text-slate-600 text-xs flex items-start gap-2.5">
-                <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded font-bold text-[10px] shrink-0 mt-0.5">INFO</span>
-                <span className="leading-relaxed">
-                  Bukti foto dokumentasi bersifat <strong>opsional</strong> (bisa diisi atau dikosongkan). Laporan akan tetap tersimpan secara lengkap tanpa lampiran foto.
-                </span>
               </div>
             )}
           </div>
