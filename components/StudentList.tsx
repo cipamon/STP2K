@@ -28,6 +28,7 @@ import {
   Eye,
   FileSpreadsheet,
   Sliders,
+  RefreshCw,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -73,6 +74,8 @@ interface StudentListProps {
   activeAcademicYear?: string;
   users?: User[];
   onSavePrintSettings?: (settings: PrintDocumentSettings) => Promise<void> | void;
+  onSyncData?: () => Promise<void> | void;
+  isSyncing?: boolean;
 }
 
 const StudentList: React.FC<StudentListProps> = ({
@@ -91,6 +94,8 @@ const StudentList: React.FC<StudentListProps> = ({
   activeAcademicYear,
   users = [],
   onSavePrintSettings,
+  onSyncData,
+  isSyncing: isCloudSyncing = false,
 }) => {
   const targetAcademicYear = activeAcademicYear || appConfig.academicYear;
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -1038,6 +1043,19 @@ const StudentList: React.FC<StudentListProps> = ({
                   </div>
                 )}
               </div>
+
+              {onSyncData && (
+                <button
+                  type="button"
+                  onClick={() => onSyncData()}
+                  disabled={isCloudSyncing}
+                  className="flex items-center justify-center gap-1.5 bg-white text-sky-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-sky-50 transition border border-sky-200 shadow-xs cursor-pointer disabled:opacity-60"
+                  title="Sinkronkan data siswa tercatat sebelumnya, poin & catatan dengan Cloud Firestore"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isCloudSyncing ? 'animate-spin' : ''}`} />
+                  <span className="truncate">{isCloudSyncing ? 'Sinkron...' : 'Sinkron Data'}</span>
+                </button>
+              )}
 
               <button
                 onClick={handleExportExcel}

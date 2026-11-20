@@ -26,6 +26,7 @@ import {
 import { 
   testFirestoreConnection, 
   seedInitialCloudDataIfNeeded, 
+  fetchAllCloudDataFromServer,
   subscribeToSettings, 
   subscribeToUsers, 
   subscribeToStudents, 
@@ -50,6 +51,7 @@ import {
   clearCloudActivities, 
   resetCloudAllSampleData 
 } from './services/firebase';
+import { mergeImportedStudents, reconcileStudentsAndViolations } from './utils/studentSync';
 import { getDefaultUserAvatar, getUserAvatar } from './utils/avatarHelpers';
 import ConfirmModal from './components/ConfirmModal';
 import { 
@@ -396,6 +398,215 @@ const App: React.FC = () => {
   // General Settings Form State
   const [tempConfig, setTempConfig] = useState<AppConfig>(appConfig);
 
+  // Latest state refs to prevent stale closures inside async sync & real-time listeners
+  const studentsRef = useRef<Student[]>(students);
+  const violationsRef = useRef<ViolationRecord[]>(violations);
+  const appConfigRef = useRef<AppConfig>(appConfig);
+  const hasReconciledBootRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    studentsRef.current = students;
+  }, [students]);
+
+  useEffect(() => {
+    violationsRef.current = violations;
+  }, [violations]);
+
+  useEffect(() => {
+    appConfigRef.current = appConfig;
+  }, [appConfig]);
+
+  // Helpers to track known Cloud IDs & pending offline mutations safely
+  const KNOWN_CLOUD_STUDENT_IDS_KEY = 'siPersis_knownCloudStudentIds';
+  const KNOWN_CLOUD_VIOLATION_IDS_KEY = 'siPersis_knownCloudViolationIds';
+  const PENDING_SYNC_KEY = 'siPersis_pendingCloudSync';
+
+  interface PendingCloudSyncQueue {
+    upsertStudents: string[];
+    deleteStudents: string[];
+    upsertViolations: string[];
+    deleteViolations: string[];
+  }
+
+  const readIdSet = (key: string): Set<string> => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return new Set(parsed.map(String));
+      }
+    } catch {
+      // ignore
+    }
+    return new Set();
+  };
+
+  const writeIdSet = (key: string, ids: Iterable<string>) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(Array.from(new Set(ids))));
+    } catch {
+      // ignore
+    }
+  };
+
+  const readPendingQueue = (): PendingCloudSyncQueue => {
+    try {
+      const raw = localStorage.getItem(PENDING_SYNC_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          upsertStudents: Array.isArray(parsed.upsertStudents) ? parsed.upsertStudents : [],
+          deleteStudents: Array.isArray(parsed.deleteStudents) ? parsed.deleteStudents : [],
+          upsertViolations: Array.isArray(parsed.upsertViolations) ? parsed.upsertViolations : [],
+          deleteViolations: Array.isArray(parsed.deleteViolations) ? parsed.deleteViolations : [],
+        };
+      }
+    } catch {
+      // ignore
+    }
+    return { upsertStudents: [], deleteStudents: [], upsertViolations: [], deleteViolations: [] };
+  };
+
+  const writePendingQueue = (queue: PendingCloudSyncQueue) => {
+    try {
+      localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(queue));
+    } catch {
+      // ignore
+    }
+  };
+
+  const queuePendingMutation = (partial: Partial<PendingCloudSyncQueue>) => {
+    const cur = readPendingQueue();
+    const next: PendingCloudSyncQueue = {
+      upsertStudents: Array.from(new Set([...cur.upsertStudents, ...(partial.upsertStudents || [])])).filter(
+        id => !(partial.deleteStudents || []).includes(id)
+      ),
+      deleteStudents: Array.from(new Set([...cur.deleteStudents, ...(partial.deleteStudents || [])])).filter(
+        id => !(partial.upsertStudents || []).includes(id)
+      ),
+      upsertViolations: Array.from(new Set([...cur.upsertViolations, ...(partial.upsertViolations || [])])).filter(
+        id => !(partial.deleteViolations || []).includes(id)
+      ),
+      deleteViolations: Array.from(new Set([...cur.deleteViolations, ...(partial.deleteViolations || [])])).filter(
+        id => !(partial.upsertViolations || []).includes(id)
+      ),
+    };
+    writePendingQueue(next);
+  };
+
+  const isMockStudentId = (id: string) => /^s\d+$/.test(id);
+  const isMockViolationId = (id: string) => /^v\d+$/.test(id);
+
+  const flushPendingCloudSync = async (localStudents: Student[], localViolations: ViolationRecord[]) => {
+    const queue = readPendingQueue();
+    const sMap = new Map(localStudents.map(s => [s.id, s]));
+    const vMap = new Map(localViolations.map(v => [v.id, v]));
+
+    const stuUpserts = queue.upsertStudents.map(id => sMap.get(id)).filter(Boolean) as Student[];
+    const vioUpserts = queue.upsertViolations.map(id => vMap.get(id)).filter(Boolean) as ViolationRecord[];
+
+    if (stuUpserts.length > 0) await bulkSaveCloudStudents(stuUpserts);
+    if (queue.deleteStudents.length > 0) await bulkDeleteCloudStudents(queue.deleteStudents);
+    if (vioUpserts.length > 0) await bulkSaveCloudViolations(vioUpserts);
+    if (queue.deleteViolations.length > 0) await bulkDeleteCloudViolations(queue.deleteViolations);
+
+    writePendingQueue({ upsertStudents: [], deleteStudents: [], upsertViolations: [], deleteViolations: [] });
+  };
+
+  const mergeCloudWithUnsyncedLocal = (
+    cloudStudents: Student[],
+    cloudViolations: ViolationRecord[],
+    localStudents: Student[],
+    localViolations: ViolationRecord[]
+  ) => {
+    const knownStudentIds = readIdSet(KNOWN_CLOUD_STUDENT_IDS_KEY);
+    const knownViolationIds = readIdSet(KNOWN_CLOUD_VIOLATION_IDS_KEY);
+    const pending = readPendingQueue();
+    const deletedStudentSet = new Set(pending.deleteStudents);
+    const deletedViolationSet = new Set(pending.deleteViolations);
+
+    const cloudStudentMap = new Map(cloudStudents.map(s => [s.id, s]));
+    const cloudViolationMap = new Map(cloudViolations.map(v => [v.id, v]));
+
+    const extraLocalStudents: Student[] = [];
+    localStudents.forEach(ls => {
+      if (deletedStudentSet.has(ls.id)) return;
+      if (!cloudStudentMap.has(ls.id) && !isMockStudentId(ls.id) && !knownStudentIds.has(ls.id)) {
+        extraLocalStudents.push(ls);
+      }
+    });
+
+    const extraLocalViolations: ViolationRecord[] = [];
+    localViolations.forEach(lv => {
+      if (deletedViolationSet.has(lv.id)) return;
+      if (!cloudViolationMap.has(lv.id) && !isMockViolationId(lv.id) && !knownViolationIds.has(lv.id)) {
+        extraLocalViolations.push(lv);
+      }
+    });
+
+    const mergedStudents = [
+      ...extraLocalStudents,
+      ...cloudStudents.filter(cs => !deletedStudentSet.has(cs.id)),
+    ];
+    const mergedViolations = [
+      ...extraLocalViolations,
+      ...cloudViolations.filter(cv => !deletedViolationSet.has(cv.id)),
+    ];
+
+    return { mergedStudents, mergedViolations, extraLocalStudents, extraLocalViolations };
+  };
+
+  const applyAndPersistReconciledCloudData = async (
+    baseStudents: Student[],
+    baseViolations: ViolationRecord[],
+    extraLocalStudents: Student[],
+    extraLocalViolations: ViolationRecord[],
+    activeYear: string
+  ) => {
+    const reconciled = reconcileStudentsAndViolations(baseStudents, baseViolations, activeYear);
+
+    studentsRef.current = reconciled.students;
+    violationsRef.current = reconciled.violations;
+    setStudents(reconciled.students);
+    setViolations(reconciled.violations);
+
+    const studentsToPushMap = new Map<string, Student>();
+    extraLocalStudents.forEach(s => {
+      const latest = reconciled.students.find(rs => rs.id === s.id);
+      if (latest) studentsToPushMap.set(latest.id, latest);
+    });
+    reconciled.updatedStudents.forEach(s => studentsToPushMap.set(s.id, s));
+
+    const violationsToPushMap = new Map<string, ViolationRecord>();
+    extraLocalViolations.forEach(v => {
+      const latest = reconciled.violations.find(rv => rv.id === v.id);
+      if (latest) violationsToPushMap.set(latest.id, latest);
+    });
+    reconciled.updatedViolations.forEach(v => violationsToPushMap.set(v.id, v));
+
+    const studentsToPush = Array.from(studentsToPushMap.values());
+    const violationsToPush = Array.from(violationsToPushMap.values());
+
+    if (studentsToPush.length > 0) {
+      await bulkSaveCloudStudents(studentsToPush);
+    }
+    if (reconciled.deletedDuplicateStudentIds.length > 0) {
+      await bulkDeleteCloudStudents(reconciled.deletedDuplicateStudentIds);
+    }
+    if (violationsToPush.length > 0) {
+      await bulkSaveCloudViolations(violationsToPush);
+    }
+
+    writeIdSet(KNOWN_CLOUD_STUDENT_IDS_KEY, reconciled.students.map(s => s.id));
+    writeIdSet(KNOWN_CLOUD_VIOLATION_IDS_KEY, reconciled.violations.map(v => v.id));
+
+    return {
+      reconciled,
+      pushedStudentsCount: studentsToPush.length,
+      pushedViolationsCount: violationsToPush.length,
+    };
+  };
+
   // Real-time Cloud Synchronization across all devices & accounts
   useEffect(() => {
     let unsubscribeSettings: (() => void) | undefined;
@@ -411,6 +622,30 @@ const App: React.FC = () => {
         setIsCloudConnected(true);
         // Seed initial data if Firestore collections are completely empty
         await seedInitialCloudDataIfNeeded(DEFAULT_APP_CONFIG);
+
+        // Flush any queued offline edits from previous session, then reconcile cloud & local records once
+        try {
+          await flushPendingCloudSync(studentsRef.current, violationsRef.current);
+          const snapshot = await fetchAllCloudDataFromServer();
+          const activeYear = snapshot.config?.academicYear || appConfigRef.current.academicYear;
+          const { mergedStudents, mergedViolations, extraLocalStudents, extraLocalViolations } =
+            mergeCloudWithUnsyncedLocal(
+              snapshot.students,
+              snapshot.violations,
+              studentsRef.current,
+              violationsRef.current
+            );
+          await applyAndPersistReconciledCloudData(
+            mergedStudents,
+            mergedViolations,
+            extraLocalStudents,
+            extraLocalViolations,
+            activeYear
+          );
+          hasReconciledBootRef.current = true;
+        } catch (bootSyncErr) {
+          console.warn('Initial student/violation reconciliation note:', bootSyncErr);
+        }
 
         // Real-time Settings Listener (Identitas sekolah & setting sama di semua akun)
         unsubscribeSettings = subscribeToSettings((remoteConfig) => {
@@ -460,7 +695,6 @@ const App: React.FC = () => {
               printSettings: mergedPrintSettings,
             };
             if (isSavingLogoRef.current) {
-              // Avoid overwriting a logo upload that is currently being saved to Firestore
               setAppConfig(prev => ({ ...mergedConfig, logoUrl: prev.logoUrl }));
               return;
             }
@@ -479,17 +713,35 @@ const App: React.FC = () => {
           }
         });
 
-        // Real-time Students Listener (Semua akun melihat data siswa yang sama)
+        // Real-time Students Listener (Semua akun melihat data siswa yang sama & selalu sinkron poin/catatan)
         unsubscribeStudents = subscribeToStudents((remoteStudents) => {
           if (Array.isArray(remoteStudents)) {
-            setStudents(remoteStudents);
+            writeIdSet(KNOWN_CLOUD_STUDENT_IDS_KEY, remoteStudents.map(s => s.id));
+            const reconciled = reconcileStudentsAndViolations(
+              remoteStudents,
+              violationsRef.current,
+              appConfigRef.current.academicYear
+            );
+            studentsRef.current = reconciled.students;
+            violationsRef.current = reconciled.violations;
+            setStudents(reconciled.students);
+            setViolations(reconciled.violations);
           }
         });
 
-        // Real-time Violations Listener (Semua guru & admin melihat laporan yang sama)
+        // Real-time Violations Listener (Semua guru & admin melihat laporan yang sama & poin siswa selalu akurat)
         unsubscribeViolations = subscribeToViolations((remoteViolations) => {
           if (Array.isArray(remoteViolations)) {
-            setViolations(remoteViolations);
+            writeIdSet(KNOWN_CLOUD_VIOLATION_IDS_KEY, remoteViolations.map(v => v.id));
+            const reconciled = reconcileStudentsAndViolations(
+              studentsRef.current,
+              remoteViolations,
+              appConfigRef.current.academicYear
+            );
+            studentsRef.current = reconciled.students;
+            violationsRef.current = reconciled.violations;
+            setStudents(reconciled.students);
+            setViolations(reconciled.violations);
           }
         });
 
@@ -584,11 +836,62 @@ const App: React.FC = () => {
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      await testFirestoreConnection();
-      setIsCloudConnected(true);
-      toast.success('Database Cloud terhubung & tersinkronisasi!');
+      const ok = await testFirestoreConnection();
+      setIsCloudConnected(ok);
+
+      // 1. Push any failed/pending local edits first
+      await flushPendingCloudSync(studentsRef.current, violationsRef.current);
+
+      // 2. Pull fresh cloud collections directly from Firestore server
+      const snapshot = await fetchAllCloudDataFromServer();
+      const activeYear = snapshot.config?.academicYear || appConfigRef.current.academicYear;
+
+      if (snapshot.users && snapshot.users.length > 0) {
+        setUsers(snapshot.users);
+      }
+
+      // 3. Merge any previously recorded local-only records that never reached cloud & reconcile all links/points
+      const { mergedStudents, mergedViolations, extraLocalStudents, extraLocalViolations } =
+        mergeCloudWithUnsyncedLocal(
+          snapshot.students,
+          snapshot.violations,
+          studentsRef.current,
+          violationsRef.current
+        );
+
+      const { reconciled, pushedStudentsCount, pushedViolationsCount } =
+        await applyAndPersistReconciledCloudData(
+          mergedStudents,
+          mergedViolations,
+          extraLocalStudents,
+          extraLocalViolations,
+          activeYear
+        );
+
+      const { summary } = reconciled;
+      const details: string[] = [];
+      if (pushedStudentsCount > 0) details.push(`${pushedStudentsCount} data siswa disinkronkan`);
+      if (pushedViolationsCount > 0) details.push(`${pushedViolationsCount} catatan diperbarui`);
+      if (summary.relinkedViolationsCount > 0) details.push(`${summary.relinkedViolationsCount} catatan ditautkan ulang`);
+      if (summary.recalculatedPointsCount > 0) details.push(`${summary.recalculatedPointsCount} poin siswa dihitung ulang`);
+      if (summary.mergedDuplicatesCount > 0) details.push(`${summary.mergedDuplicatesCount} duplikat digabung`);
+
+      toast.success(
+        details.length > 0
+          ? `Sinkronisasi selesai (${reconciled.students.length} siswa): ${details.join(', ')}.`
+          : `Seluruh data siswa (${reconciled.students.length} siswa) & ${reconciled.violations.length} catatan sudah sinkron dengan Cloud!`
+      );
     } catch (e) {
-      toast.error('Gagal menyinkronkan dengan Cloud Firestore.');
+      console.error('Manual sync error:', e);
+      // Fallback: at least reconcile local state so student points & links stay accurate offline
+      const localReconciled = reconcileStudentsAndViolations(
+        studentsRef.current,
+        violationsRef.current,
+        appConfigRef.current.academicYear
+      );
+      setStudents(localReconciled.students);
+      setViolations(localReconciled.violations);
+      toast.error('Koneksi Cloud gagal, namun poin & catatan siswa di perangkat ini telah dirapikan.');
     } finally {
       setIsSyncing(false);
     }
@@ -599,8 +902,8 @@ const App: React.FC = () => {
       appConfig.academicYears && appConfig.academicYears.length > 0
         ? appConfig.academicYears
         : DEFAULT_ACADEMIC_YEARS;
-    const fromStudents = students.map(s => getRecordAcademicYear(s.academicYear));
-    const fromViolations = violations.map(v => getRecordAcademicYear(v.academicYear));
+    const fromStudents = students.map(s => getRecordAcademicYear(s.academicYear, appConfig.academicYear));
+    const fromViolations = violations.map(v => getRecordAcademicYear(v.academicYear, appConfig.academicYear));
     return sortAcademicYears([
       ...baseYears,
       appConfig.academicYear,
@@ -613,13 +916,13 @@ const App: React.FC = () => {
     selectedAcademicYear === 'ALL' ? appConfig.academicYear : selectedAcademicYear;
 
   const scopedStudents = useMemo(
-    () => students.filter(s => matchesAcademicYear(s.academicYear, selectedAcademicYear)),
-    [students, selectedAcademicYear]
+    () => students.filter(s => matchesAcademicYear(s.academicYear, selectedAcademicYear, appConfig.academicYear)),
+    [students, selectedAcademicYear, appConfig.academicYear]
   );
 
   const scopedViolations = useMemo(
-    () => violations.filter(v => matchesAcademicYear(v.academicYear, selectedAcademicYear)),
-    [violations, selectedAcademicYear]
+    () => violations.filter(v => matchesAcademicYear(v.academicYear, selectedAcademicYear, appConfig.academicYear)),
+    [violations, selectedAcademicYear, appConfig.academicYear]
   );
 
   const displayConfig: AppConfig = useMemo(
@@ -659,20 +962,30 @@ const App: React.FC = () => {
       ...record,
       academicYear: record.academicYear || effectiveInputAcademicYear,
     };
-    setViolations([taggedRecord, ...violations]);
-    
-    // Update student points
-    const targetStudent = students.find(s => s.id === taggedRecord.studentId);
-    const updatedStudent = targetStudent 
-      ? { ...targetStudent, totalPoints: targetStudent.totalPoints + taggedRecord.points }
-      : null;
+    const nextViolations = [taggedRecord, ...violationsRef.current];
+    const reconciled = reconcileStudentsAndViolations(
+      studentsRef.current,
+      nextViolations,
+      appConfig.academicYear
+    );
+    studentsRef.current = reconciled.students;
+    violationsRef.current = reconciled.violations;
+    setViolations(reconciled.violations);
+    setStudents(reconciled.students);
 
-    if (updatedStudent) {
-      setStudents(students.map(s => s.id === updatedStudent.id ? updatedStudent : s));
-      saveCloudStudent(updatedStudent).catch(err => console.warn('Cloud save student points error:', err));
+    const savedViolation = reconciled.violations.find(v => v.id === taggedRecord.id) || taggedRecord;
+    saveCloudViolation(savedViolation).catch(err => {
+      console.warn('Cloud save violation error:', err);
+      queuePendingMutation({ upsertViolations: [savedViolation.id] });
+    });
+
+    if (reconciled.updatedStudents.length > 0) {
+      bulkSaveCloudStudents(reconciled.updatedStudents).catch(err => {
+        console.warn('Cloud save student points error:', err);
+        queuePendingMutation({ upsertStudents: reconciled.updatedStudents.map(s => s.id) });
+      });
     }
 
-    saveCloudViolation(taggedRecord).catch(err => console.warn('Cloud save violation error:', err));
     toast.success(taggedRecord.evidenceUrl ? 'Laporan berhasil ditambahkan beserta bukti foto!' : 'Laporan berhasil ditambahkan!');
 
     // Dispatch to external link / webhook if configured
@@ -680,7 +993,7 @@ const App: React.FC = () => {
       if (isGoogleSpreadsheetUrl(appConfig.webhookUrl)) {
         toast.error('Data belum terkirim ke Google Sheets: Link di Pengaturan masih link tampilan spreadsheet langsung. Pasang skrip Web App (/exec) di menu Pengaturan agar data otomatis masuk ke baris tabel.', { duration: 8000 });
       } else if (appConfig.webhookEnabled !== false) {
-        sendViolationToExternalWebhook(appConfig.webhookUrl, taggedRecord).then(res => {
+        sendViolationToExternalWebhook(appConfig.webhookUrl, savedViolation).then(res => {
           if (res.success) {
             toast.info('Data berhasil disinkronkan ke tautan eksternal!');
           } else if (res.isDirectSpreadsheetUrl) {
@@ -699,73 +1012,76 @@ const App: React.FC = () => {
       userAvatar: currentUser?.avatar,
       action: 'ADD_VIOLATION',
       title: record.category === ViolationCategory.PRESTASI ? 'Pencatatan Reward Siswa' : 'Pencatatan Pelanggaran Siswa',
-      details: `Mencatat ${record.category}: "${record.description}" (${record.points > 0 ? '+' : ''}${record.points} poin) untuk siswa ${record.studentName} (${record.studentClass})`,
+      details: `Mencatat ${record.category}: "${record.description}" (${record.points > 0 ? '+' : ''}${record.points} poin) untuk siswa ${savedViolation.studentName} (${savedViolation.studentClass})`,
       device: 'Browser Web'
     });
   };
 
   const deleteViolation = (id: string) => {
-    const recordToDelete = violations.find(v => v.id === id);
+    const recordToDelete = violationsRef.current.find(v => v.id === id);
     if (recordToDelete) {
-       setViolations(violations.filter(v => v.id !== id));
-       // Revert points
-       const targetStudent = students.find(s => s.id === recordToDelete.studentId);
-       const updatedStudent = targetStudent
-         ? { ...targetStudent, totalPoints: targetStudent.totalPoints - recordToDelete.points }
-         : null;
+      const nextViolations = violationsRef.current.filter(v => v.id !== id);
+      const reconciled = reconcileStudentsAndViolations(
+        studentsRef.current,
+        nextViolations,
+        appConfig.academicYear
+      );
+      studentsRef.current = reconciled.students;
+      violationsRef.current = reconciled.violations;
+      setViolations(reconciled.violations);
+      setStudents(reconciled.students);
 
-       if (updatedStudent) {
-         setStudents(students.map(s => s.id === updatedStudent.id ? updatedStudent : s));
-         saveCloudStudent(updatedStudent).catch(err => console.warn('Cloud update student points error:', err));
-       }
-       deleteCloudViolation(id).catch(err => console.warn('Cloud delete violation error:', err));
+      deleteCloudViolation(id).catch(err => {
+        console.warn('Cloud delete violation error:', err);
+        queuePendingMutation({ deleteViolations: [id] });
+      });
+      if (reconciled.updatedStudents.length > 0) {
+        bulkSaveCloudStudents(reconciled.updatedStudents).catch(err => {
+          console.warn('Cloud update student points error:', err);
+          queuePendingMutation({ upsertStudents: reconciled.updatedStudents.map(s => s.id) });
+        });
+      }
 
-       toast.success('Laporan berhasil dihapus!');
+      toast.success('Laporan berhasil dihapus!');
 
-       logActivity({
-         userId: currentUser?.id || 'anon',
-         userName: currentUser?.name || 'Petugas',
-         userRole: currentUser?.role || UserRole.ADMIN,
-         userAvatar: currentUser?.avatar,
-         action: 'DELETE_VIOLATION',
-         title: 'Penghapusan Catatan Laporan',
-         details: `Menghapus laporan ${recordToDelete.category} siswa ${recordToDelete.studentName} (${recordToDelete.description})`,
-         device: 'Browser Web'
-       });
+      logActivity({
+        userId: currentUser?.id || 'anon',
+        userName: currentUser?.name || 'Petugas',
+        userRole: currentUser?.role || UserRole.ADMIN,
+        userAvatar: currentUser?.avatar,
+        action: 'DELETE_VIOLATION',
+        title: 'Penghapusan Catatan Laporan',
+        details: `Menghapus laporan ${recordToDelete.category} siswa ${recordToDelete.studentName} (${recordToDelete.description})`,
+        device: 'Browser Web'
+      });
     }
   };
 
   const handleBulkDeleteViolations = (ids: string[]) => {
     if (ids.length === 0) return;
-    const recordsToDelete = violations.filter(v => ids.includes(v.id));
+    const recordsToDelete = violationsRef.current.filter(v => ids.includes(v.id));
     if (recordsToDelete.length === 0) return;
 
-    // Filter out deleted violations
-    setViolations(prev => prev.filter(v => !ids.includes(v.id)));
+    const nextViolations = violationsRef.current.filter(v => !ids.includes(v.id));
+    const reconciled = reconcileStudentsAndViolations(
+      studentsRef.current,
+      nextViolations,
+      appConfig.academicYear
+    );
+    studentsRef.current = reconciled.students;
+    violationsRef.current = reconciled.violations;
+    setViolations(reconciled.violations);
+    setStudents(reconciled.students);
 
-    // Revert points for all affected students
-    const pointDeltasByStudentId: { [studentId: string]: number } = {};
-    recordsToDelete.forEach(record => {
-      pointDeltasByStudentId[record.studentId] = (pointDeltasByStudentId[record.studentId] || 0) + record.points;
+    bulkDeleteCloudViolations(ids).catch(err => {
+      console.warn('Cloud bulk delete violations error:', err);
+      queuePendingMutation({ deleteViolations: ids });
     });
-
-    const touchedStudents: Student[] = [];
-    const updatedStudents = students.map(student => {
-      const delta = pointDeltasByStudentId[student.id];
-      if (delta !== undefined) {
-        const updated = { ...student, totalPoints: student.totalPoints - delta };
-        touchedStudents.push(updated);
-        return updated;
-      }
-      return student;
-    });
-
-    setStudents(updatedStudents);
-
-    // Sync deletion and student point changes to Cloud Firestore
-    bulkDeleteCloudViolations(ids).catch(err => console.warn('Cloud bulk delete violations error:', err));
-    if (touchedStudents.length > 0) {
-      bulkSaveCloudStudents(touchedStudents).catch(err => console.warn('Cloud bulk update touched students error:', err));
+    if (reconciled.updatedStudents.length > 0) {
+      bulkSaveCloudStudents(reconciled.updatedStudents).catch(err => {
+        console.warn('Cloud bulk update touched students error:', err);
+        queuePendingMutation({ upsertStudents: reconciled.updatedStudents.map(s => s.id) });
+      });
     }
 
     toast.success(`${recordsToDelete.length} data laporan dan bukti foto berhasil dihapus!`);
@@ -788,9 +1104,34 @@ const App: React.FC = () => {
       ...student,
       academicYear: student.academicYear || effectiveInputAcademicYear,
     };
-    setStudents([taggedStudent, ...students]);
-    saveCloudStudent(taggedStudent).catch(err => console.warn('Cloud save student error:', err));
-    toast.success(`Data siswa berhasil ditambahkan ke TA ${taggedStudent.academicYear} dan disinkronkan!`);
+    const reconciled = reconcileStudentsAndViolations(
+      [taggedStudent, ...studentsRef.current],
+      violationsRef.current,
+      appConfig.academicYear
+    );
+    studentsRef.current = reconciled.students;
+    violationsRef.current = reconciled.violations;
+    setStudents(reconciled.students);
+    setViolations(reconciled.violations);
+
+    const savedStudent = reconciled.students.find(s => s.id === taggedStudent.id) || reconciled.updatedStudents[0] || taggedStudent;
+    saveCloudStudent(savedStudent).catch(err => {
+      console.warn('Cloud save student error:', err);
+      queuePendingMutation({ upsertStudents: [savedStudent.id] });
+    });
+    if (reconciled.updatedViolations.length > 0) {
+      bulkSaveCloudViolations(reconciled.updatedViolations).catch(err => {
+        console.warn('Cloud relink violations error:', err);
+        queuePendingMutation({ upsertViolations: reconciled.updatedViolations.map(v => v.id) });
+      });
+    }
+    if (reconciled.deletedDuplicateStudentIds.length > 0) {
+      bulkDeleteCloudStudents(reconciled.deletedDuplicateStudentIds).catch(err => {
+        queuePendingMutation({ deleteStudents: reconciled.deletedDuplicateStudentIds });
+      });
+    }
+
+    toast.success(`Data siswa berhasil ditambahkan ke TA ${savedStudent.academicYear} dan disinkronkan!`);
 
     logActivity({
       userId: currentUser?.id || 'anon',
@@ -799,7 +1140,7 @@ const App: React.FC = () => {
       userAvatar: currentUser?.avatar,
       action: 'ADD_STUDENT',
       title: 'Tambah Siswa Baru',
-      details: `Mendaftarkan siswa: ${taggedStudent.name} (NIS: ${taggedStudent.nis}, Kelas: ${taggedStudent.class}, TA: ${taggedStudent.academicYear})`,
+      details: `Mendaftarkan siswa: ${savedStudent.name} (NIS: ${savedStudent.nis}, Kelas: ${savedStudent.class}, TA: ${savedStudent.academicYear})`,
       device: 'Browser Web'
     });
   };
@@ -809,9 +1150,29 @@ const App: React.FC = () => {
       ...updatedStudent,
       academicYear: updatedStudent.academicYear || effectiveInputAcademicYear,
     };
-    setStudents(students.map(s => s.id === taggedStudent.id ? taggedStudent : s));
-    saveCloudStudent(taggedStudent).catch(err => console.warn('Cloud update student error:', err));
-    toast.success('Data siswa berhasil diperbarui!');
+    const nextStudents = studentsRef.current.map(s => (s.id === taggedStudent.id ? taggedStudent : s));
+    const reconciled = reconcileStudentsAndViolations(
+      nextStudents,
+      violationsRef.current,
+      appConfig.academicYear
+    );
+    studentsRef.current = reconciled.students;
+    violationsRef.current = reconciled.violations;
+    setStudents(reconciled.students);
+    setViolations(reconciled.violations);
+
+    const finalStudent = reconciled.students.find(s => s.id === taggedStudent.id) || taggedStudent;
+    saveCloudStudent(finalStudent).catch(err => {
+      console.warn('Cloud update student error:', err);
+      queuePendingMutation({ upsertStudents: [finalStudent.id] });
+    });
+    if (reconciled.updatedViolations.length > 0) {
+      bulkSaveCloudViolations(reconciled.updatedViolations).catch(err => {
+        console.warn('Cloud sync student violations metadata error:', err);
+        queuePendingMutation({ upsertViolations: reconciled.updatedViolations.map(v => v.id) });
+      });
+    }
+    toast.success('Data siswa dan seluruh riwayat catatannya berhasil diperbarui & disinkronkan!');
 
     logActivity({
       userId: currentUser?.id || 'anon',
@@ -820,15 +1181,20 @@ const App: React.FC = () => {
       userAvatar: currentUser?.avatar,
       action: 'UPDATE_STUDENT',
       title: 'Pembaruan Data Siswa',
-      details: `Memperbarui biodata siswa: ${taggedStudent.name} (Kelas: ${taggedStudent.class})`,
+      details: `Memperbarui biodata siswa: ${finalStudent.name} (Kelas: ${finalStudent.class})`,
       device: 'Browser Web'
     });
   };
 
   const handleDeleteStudent = (id: string) => {
-    const target = students.find(s => s.id === id);
-    setStudents(students.filter(s => s.id !== id));
-    deleteCloudStudent(id).catch(err => console.warn('Cloud delete student error:', err));
+    const target = studentsRef.current.find(s => s.id === id);
+    const nextStudents = studentsRef.current.filter(s => s.id !== id);
+    studentsRef.current = nextStudents;
+    setStudents(nextStudents);
+    deleteCloudStudent(id).catch(err => {
+      console.warn('Cloud delete student error:', err);
+      queuePendingMutation({ deleteStudents: [id] });
+    });
     toast.success('Data siswa berhasil dihapus!');
 
     logActivity({
@@ -844,13 +1210,38 @@ const App: React.FC = () => {
   };
 
   const handleBulkUploadStudents = (newStudents: Student[]) => {
-    const taggedStudents = newStudents.map(s => ({
-      ...s,
-      academicYear: s.academicYear || effectiveInputAcademicYear,
-    }));
-    setStudents([...taggedStudents, ...students]);
-    bulkSaveCloudStudents(taggedStudents).catch(err => console.warn('Cloud bulk save students error:', err));
-    toast.success(`${taggedStudents.length} data siswa berhasil diimpor ke TA ${effectiveInputAcademicYear} & disinkronkan!`);
+    const { result, insertedCount, updatedExistingCount } = mergeImportedStudents(
+      studentsRef.current,
+      newStudents,
+      violationsRef.current,
+      effectiveInputAcademicYear
+    );
+    studentsRef.current = result.students;
+    violationsRef.current = result.violations;
+    setStudents(result.students);
+    setViolations(result.violations);
+
+    if (result.updatedStudents.length > 0) {
+      bulkSaveCloudStudents(result.updatedStudents).catch(err => {
+        console.warn('Cloud bulk save students error:', err);
+        queuePendingMutation({ upsertStudents: result.updatedStudents.map(s => s.id) });
+      });
+    }
+    if (result.updatedViolations.length > 0) {
+      bulkSaveCloudViolations(result.updatedViolations).catch(err => {
+        console.warn('Cloud relink violations error:', err);
+        queuePendingMutation({ upsertViolations: result.updatedViolations.map(v => v.id) });
+      });
+    }
+    if (result.deletedDuplicateStudentIds.length > 0) {
+      bulkDeleteCloudStudents(result.deletedDuplicateStudentIds).catch(err => {
+        queuePendingMutation({ deleteStudents: result.deletedDuplicateStudentIds });
+      });
+    }
+
+    toast.success(
+      `${insertedCount} siswa baru & ${updatedExistingCount} siswa lama disinkronkan ke TA ${effectiveInputAcademicYear}!`
+    );
 
     logActivity({
       userId: currentUser?.id || 'anon',
@@ -858,8 +1249,8 @@ const App: React.FC = () => {
       userRole: currentUser?.role || UserRole.ADMIN,
       userAvatar: currentUser?.avatar,
       action: 'BULK_IMPORT',
-      title: 'Impor Massal Siswa via Excel',
-      details: `Berhasil mengimpor ${taggedStudents.length} record data siswa baru untuk TA ${effectiveInputAcademicYear}`,
+      title: 'Impor & Sinkronisasi Massal Siswa via Excel',
+      details: `Menambahkan ${insertedCount} siswa baru dan menyinkronkan ${updatedExistingCount} siswa tercatat sebelumnya untuk TA ${effectiveInputAcademicYear}`,
       device: 'Browser Web'
     });
   };
@@ -869,26 +1260,30 @@ const App: React.FC = () => {
       ...v,
       academicYear: v.academicYear || effectiveInputAcademicYear,
     }));
-    setViolations([...taggedViolations, ...violations]);
-    
-    // Update student points for each violation
-    const updatedStudents = [...students];
-    const touchedStudents: Student[] = [];
-    taggedViolations.forEach(record => {
-      const studentIndex = updatedStudents.findIndex(s => s.id === record.studentId);
-      if (studentIndex > -1) {
-        updatedStudents[studentIndex] = {
-          ...updatedStudents[studentIndex],
-          totalPoints: updatedStudents[studentIndex].totalPoints + record.points
-        };
-        touchedStudents.push(updatedStudents[studentIndex]);
-      }
-    });
-    setStudents(updatedStudents);
+    const reconciled = reconcileStudentsAndViolations(
+      studentsRef.current,
+      [...taggedViolations, ...violationsRef.current],
+      appConfig.academicYear
+    );
+    studentsRef.current = reconciled.students;
+    violationsRef.current = reconciled.violations;
+    setViolations(reconciled.violations);
+    setStudents(reconciled.students);
 
-    bulkSaveCloudViolations(taggedViolations).catch(err => console.warn('Cloud bulk save violations error:', err));
-    if (touchedStudents.length > 0) {
-      bulkSaveCloudStudents(touchedStudents).catch(err => console.warn('Cloud bulk update touched students error:', err));
+    const importedIds = new Set(taggedViolations.map(v => v.id));
+    const violationsToSave = reconciled.violations.filter(v => importedIds.has(v.id));
+
+    if (violationsToSave.length > 0) {
+      bulkSaveCloudViolations(violationsToSave).catch(err => {
+        console.warn('Cloud bulk save violations error:', err);
+        queuePendingMutation({ upsertViolations: violationsToSave.map(v => v.id) });
+      });
+    }
+    if (reconciled.updatedStudents.length > 0) {
+      bulkSaveCloudStudents(reconciled.updatedStudents).catch(err => {
+        console.warn('Cloud bulk update touched students error:', err);
+        queuePendingMutation({ upsertStudents: reconciled.updatedStudents.map(s => s.id) });
+      });
     }
     
     toast.success(`${taggedViolations.length} data laporan berhasil diimpor ke TA ${effectiveInputAcademicYear} & disinkronkan!`);
@@ -907,8 +1302,13 @@ const App: React.FC = () => {
 
   const handleBulkDeleteStudents = (ids: string[]) => {
     if (ids.length === 0) return;
-    setStudents(prev => prev.filter(s => !ids.includes(s.id)));
-    bulkDeleteCloudStudents(ids).catch(err => console.warn('Cloud bulk delete students error:', err));
+    const nextStudents = studentsRef.current.filter(s => !ids.includes(s.id));
+    studentsRef.current = nextStudents;
+    setStudents(nextStudents);
+    bulkDeleteCloudStudents(ids).catch(err => {
+      console.warn('Cloud bulk delete students error:', err);
+      queuePendingMutation({ deleteStudents: ids });
+    });
     toast.success(`${ids.length} data siswa berhasil dihapus!`);
 
     logActivity({
@@ -924,13 +1324,18 @@ const App: React.FC = () => {
   };
 
   const handleDeleteStudentsByClass = (className: string) => {
-    const targetStudents = students.filter(
-      s => s.class === className && matchesAcademicYear(s.academicYear, selectedAcademicYear)
+    const targetStudents = studentsRef.current.filter(
+      s => s.class === className && matchesAcademicYear(s.academicYear, selectedAcademicYear, appConfig.academicYear)
     );
     if (targetStudents.length === 0) return;
     const targetIds = targetStudents.map(s => s.id);
-    setStudents(prev => prev.filter(s => !targetIds.includes(s.id)));
-    bulkDeleteCloudStudents(targetIds).catch(err => console.warn('Cloud delete students by class error:', err));
+    const nextStudents = studentsRef.current.filter(s => !targetIds.includes(s.id));
+    studentsRef.current = nextStudents;
+    setStudents(nextStudents);
+    bulkDeleteCloudStudents(targetIds).catch(err => {
+      console.warn('Cloud delete students by class error:', err);
+      queuePendingMutation({ deleteStudents: targetIds });
+    });
     toast.success(`${targetStudents.length} siswa kelas ${className} berhasil dihapus!`);
 
     logActivity({
@@ -947,10 +1352,15 @@ const App: React.FC = () => {
 
   const handleDeleteAllStudents = () => {
     if (selectedAcademicYear === 'ALL') {
-      const count = students.length;
+      const count = studentsRef.current.length;
+      const allIds = studentsRef.current.map(s => s.id);
+      studentsRef.current = [];
       setStudents([]);
       localStorage.setItem('siPersis_students', JSON.stringify([]));
-      clearAllCloudStudents().catch(err => console.warn('Cloud clear students error:', err));
+      clearAllCloudStudents().catch(err => {
+        console.warn('Cloud clear students error:', err);
+        queuePendingMutation({ deleteStudents: allIds });
+      });
       toast.success(`Seluruh data siswa (${count} siswa) telah berhasil dihapus!`);
 
       logActivity({
@@ -969,8 +1379,13 @@ const App: React.FC = () => {
     const targetIds = scopedStudents.map(s => s.id);
     const count = targetIds.length;
     if (count === 0) return;
-    setStudents(prev => prev.filter(s => !targetIds.includes(s.id)));
-    bulkDeleteCloudStudents(targetIds).catch(err => console.warn('Cloud clear year students error:', err));
+    const nextStudents = studentsRef.current.filter(s => !targetIds.includes(s.id));
+    studentsRef.current = nextStudents;
+    setStudents(nextStudents);
+    bulkDeleteCloudStudents(targetIds).catch(err => {
+      console.warn('Cloud clear year students error:', err);
+      queuePendingMutation({ deleteStudents: targetIds });
+    });
     toast.success(`${count} siswa pada Tahun Ajaran ${selectedAcademicYear} berhasil dihapus!`);
 
     logActivity({
@@ -1907,6 +2322,8 @@ const App: React.FC = () => {
               activeAcademicYear={effectiveInputAcademicYear}
               users={users}
               onSavePrintSettings={handleSavePrintSettings}
+              onSyncData={handleManualSync}
+              isSyncing={isSyncing}
             />
           )}
 
@@ -2750,7 +3167,7 @@ const App: React.FC = () => {
       {/* Detail Modal */}
       {selectedStudent && (
         <StudentDetailModal 
-          student={selectedStudent} 
+          student={students.find(s => s.id === selectedStudent.id) || selectedStudent} 
           violations={scopedViolations}
           onClose={() => setSelectedStudent(null)}
           appConfig={displayConfig}

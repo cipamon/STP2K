@@ -11,8 +11,18 @@ export function getStudentPhoto(student: Pick<Student, 'photoUrl' | 'avatar' | '
   return getRawStudentPhoto(student) || getDefaultStudentAvatar(student.gender);
 }
 
+function cleanFieldValue(raw?: string): string {
+  const val = (raw || '').trim();
+  if (!val) return '';
+  const lower = val.toLowerCase();
+  if (val === '-' || val === '—' || val === '--' || lower === 'null' || lower === 'undefined' || lower === 'n/a') {
+    return '';
+  }
+  return val;
+}
+
 export function getStudentPhone(student: Pick<Student, 'phone' | 'parentPhone'>): string {
-  return student.phone || student.parentPhone || '';
+  return cleanFieldValue(student.phone) || cleanFieldValue(student.parentPhone);
 }
 
 export function getStudentStatus(student: Pick<Student, 'status'>): string {
@@ -77,8 +87,7 @@ export function parseBirthDateInput(raw: unknown): string {
 }
 
 export function formatBirthDateDisplay(birthDate?: string, shortMonth = false): string {
-  if (!birthDate) return '';
-  const str = birthDate.trim();
+  const str = cleanFieldValue(birthDate);
   if (!str) return '';
 
   const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -100,7 +109,7 @@ export function formatBirthDateDisplay(birthDate?: string, shortMonth = false): 
 }
 
 export function formatBirthPlaceDate(birthPlace?: string, birthDate?: string, shortMonth = false): string {
-  const place = (birthPlace || '').trim();
+  const place = cleanFieldValue(birthPlace);
   const dateText = formatBirthDateDisplay(birthDate, shortMonth);
   if (place && dateText) return `${place}, ${dateText}`;
   if (place) return place;

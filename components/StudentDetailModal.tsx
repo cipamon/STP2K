@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Student, ViolationRecord, ViolationCategory, AppConfig, User, PrintDocumentSettings } from '../types';
-import { X, User as UserIcon, Trophy, AlertTriangle, Calendar, Award, Printer, ArrowDownCircle, Clock, BellRing, Volume2, FileText, Image as ImageIcon, ExternalLink, Phone, Mail, MapPin, Hash, ShieldCheck, FileSpreadsheet, FileDown, Sliders } from 'lucide-react';
+import { X, User as UserIcon, Trophy, AlertTriangle, Calendar, Award, Printer, ArrowDownCircle, Clock, BellRing, Volume2, FileText, Image as ImageIcon, ExternalLink, Phone, Mail, MapPin, ShieldCheck, FileSpreadsheet, FileDown, Sliders } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getStudentTardinessInfo, buildTardinessLetterPdfDoc, playAlarmSound, isTardinessRecord } from '../utils/tardiness';
@@ -260,17 +260,14 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[94dvh] sm:max-h-[90vh] overflow-hidden flex flex-col print:shadow-none print:max-w-none print:max-h-none print:rounded-none print:h-auto print:overflow-visible">
         
         {/* Screen Header (Hidden on Print) */}
-        <div className="relative bg-gradient-to-r from-indigo-600 to-blue-500 p-4 sm:p-6 flex flex-col md:flex-row justify-between items-stretch md:items-start gap-4 text-white shrink-0 print:hidden">
-          <button onClick={onClose} className="md:hidden absolute top-3 right-3 bg-white/15 hover:bg-white/25 p-2 rounded-full transition-colors cursor-pointer" title="Tutup">
-            <X className="w-5 h-5" />
-          </button>
-
-          <div className="flex items-center gap-3.5 sm:gap-5 pr-10 md:pr-0 min-w-0">
-            <div className="relative shrink-0">
+        <div className="relative bg-gradient-to-r from-indigo-700 via-indigo-600 to-blue-600 px-4 py-4 sm:px-6 sm:py-5 text-white shrink-0 print:hidden">
+          <div className="flex items-start justify-between gap-3 sm:gap-5">
+            <div className="flex items-center gap-3.5 sm:gap-4 min-w-0 flex-1">
+              <div className="relative shrink-0">
                 <button
                   type="button"
                   onClick={() => setPreviewImage(getStudentPhoto(student))}
-                  className="group relative block rounded-full focus:outline-none cursor-pointer"
+                  className="group relative block rounded-2xl focus:outline-none cursor-pointer"
                   title="Klik untuk lihat & unduh foto siswa"
                 >
                   <img 
@@ -282,83 +279,103 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
                         e.currentTarget.src = fallback;
                       }
                     }}
-                    className="w-16 h-16 sm:w-20 sm:h-20 md:w-24 md:h-24 rounded-full object-cover border-4 border-white/30 shadow-lg group-hover:opacity-90 transition" 
+                    className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl object-cover border-2 border-white/40 shadow-md group-hover:opacity-90 transition" 
                     referrerPolicy="no-referrer"
                   />
-                  <span className="absolute inset-0 rounded-full bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-[10px] font-bold text-white transition">
+                  <span className="absolute inset-0 rounded-2xl bg-black/45 opacity-0 group-hover:opacity-100 flex items-center justify-center text-[10px] font-bold text-white transition">
                     Lihat Foto
                   </span>
                 </button>
-              {student.totalPoints < 0 && (
-                <div className="absolute -bottom-1.5 -right-1.5 bg-yellow-400 text-yellow-900 p-1 sm:p-1.5 rounded-full shadow-md border-2 border-white">
-                  <Trophy className="w-4 h-4 sm:w-5 sm:h-5" />
-                </div>
-              )}
-            </div>
-            
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-lg sm:text-xl md:text-2xl font-bold leading-tight break-words">{student.name}</h2>
-                <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold border ${getStatusBadgeClasses(getStudentStatus(student))}`}>
-                  {getStudentStatus(student)}
-                </span>
+                {student.totalPoints < 0 && (
+                  <div className="absolute -bottom-1.5 -right-1.5 bg-yellow-400 text-yellow-900 p-1 rounded-full shadow-md border-2 border-white">
+                    <Trophy className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  </div>
+                )}
               </div>
-              <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2 text-blue-50">
-                <span className="bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-mono">NIS: {student.nis}</span>
-                <span className="bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-mono">NISN: {student.nisn || '-'}</span>
-                <span className="bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-bold">{student.class}</span>
-                <span className="bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-bold">Absen: {student.absenNumber || '-'}</span>
-                <span className={`bg-white/20 px-2.5 py-0.5 sm:py-1 rounded-lg text-[11px] sm:text-xs backdrop-blur-sm font-bold border ${student.gender === 'P' ? 'border-pink-300 text-pink-100' : 'border-blue-300'}`}>
-                    {student.gender === 'L' ? 'Laki-laki' : 'Perempuan'}
-                </span>
-              </div>
-            </div>
-          </div>
 
-          <div className="flex flex-col sm:flex-row md:flex-col items-stretch sm:items-center md:items-end justify-between gap-2.5 sm:gap-3 shrink-0">
-             <div className="flex flex-wrap items-center justify-start md:justify-end gap-1.5 sm:gap-2">
-               <button 
-                  onClick={handleDownloadXls} 
-                  className="bg-white/20 hover:bg-white/30 text-white px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border border-white/20 cursor-pointer"
-                  title="Unduh biodata dan riwayat ke file XLS"
-               >
-                 <FileSpreadsheet className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Unduh XLS
-               </button>
-               <button 
-                  type="button"
-                  onClick={() => setShowPrePrintPanel((v) => !v)} 
-                  className={`px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border cursor-pointer ${
-                    showPrePrintPanel
-                      ? 'bg-white text-indigo-700 border-white'
-                      : 'bg-white/20 hover:bg-white/30 text-white border-white/20'
-                  }`}
-                  title="Atur Kop Surat, Spasi, TTD & Font sebelum Pratinjau atau Cetak"
-               >
-                 <Sliders className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Atur Kop &amp; TTD
-               </button>
-               <button 
-                  onClick={handleDirectDownloadPdf} 
-                  className="bg-white/20 hover:bg-white/30 text-white px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border border-white/20 cursor-pointer"
-                  title="Unduh langsung laporan ke PDF"
-               >
-                 <FileDown className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Unduh PDF
-               </button>
-               <button 
-                  onClick={handlePrint} 
-                  className="bg-white/20 hover:bg-white/30 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg backdrop-blur-sm border border-white/20 cursor-pointer"
-               >
-                 <Printer className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Cetak PDF
-               </button>
-               <button onClick={onClose} className="hidden md:flex bg-white/10 hover:bg-white/20 p-2 rounded-full transition-colors cursor-pointer" title="Tutup">
-                 <X className="w-5 h-5" />
-               </button>
-             </div>
-             <div className="bg-white text-indigo-900 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl shadow-lg text-center flex md:block items-center justify-between gap-2 min-w-[100px]">
-                <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-indigo-400">Total Poin</p>
-                <p className={`text-xl sm:text-2xl font-extrabold ${student.totalPoints > 50 ? 'text-red-600' : student.totalPoints < 0 ? 'text-green-600' : 'text-indigo-900'}`}>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold border ${getStatusBadgeClasses(getStudentStatus(student))}`}>
+                    {getStudentStatus(student)}
+                  </span>
+                  <span className="text-xs font-semibold text-indigo-100">
+                    {student.class} &bull; No. Absen {student.absenNumber || '-'}
+                  </span>
+                </div>
+                <h2 className="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight leading-snug text-white mt-1 break-words">
+                  {student.name}
+                </h2>
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-1 text-xs text-indigo-100/95">
+                  <span className="font-mono">NIS {student.nis}</span>
+                  <span className="text-white/40">&bull;</span>
+                  <span className="font-mono">NISN {student.nisn || '-'}</span>
+                  <span className="text-white/40">&bull;</span>
+                  <span>{student.gender === 'L' ? 'Laki-laki' : 'Perempuan'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2 sm:gap-2.5 shrink-0">
+              <div className="bg-white text-slate-900 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl shadow-md text-center min-w-[78px] sm:min-w-[92px]">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Poin</p>
+                <p className={`text-xl sm:text-2xl font-extrabold tabular-nums leading-tight ${student.totalPoints > 50 ? 'text-red-600' : student.totalPoints < 0 ? 'text-emerald-600' : 'text-indigo-700'}`}>
                   {student.totalPoints}
                 </p>
-             </div>
+              </div>
+              <button
+                onClick={onClose}
+                className="bg-white/15 hover:bg-white/25 p-2 rounded-xl transition-colors cursor-pointer"
+                title="Tutup"
+                aria-label="Tutup detail siswa"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Action Toolbar Strip (Hidden on Print) */}
+        <div className="bg-white border-b border-slate-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 shrink-0 print:hidden">
+          <div className="hidden sm:flex items-center gap-1.5 text-xs font-medium text-slate-500">
+            <FileText className="w-3.5 h-3.5 text-slate-400" />
+            <span>Ekspor &amp; Cetak Laporan Siswa</span>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2 w-full sm:w-auto">
+            <button 
+              type="button"
+              onClick={handleDownloadXls} 
+              className="bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+              title="Unduh biodata dan riwayat ke file XLS"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" /> Unduh XLS
+            </button>
+            <button 
+              type="button"
+              onClick={() => setShowPrePrintPanel((v) => !v)} 
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition border cursor-pointer whitespace-nowrap ${
+                showPrePrintPanel
+                  ? 'bg-indigo-50 text-indigo-700 border-indigo-300'
+                  : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+              }`}
+              title="Atur Kop Surat, Spasi, TTD & Font sebelum Pratinjau atau Cetak"
+            >
+              <Sliders className="w-3.5 h-3.5 text-indigo-600" /> Atur Kop &amp; TTD
+            </button>
+            <button 
+              type="button"
+              onClick={handleDirectDownloadPdf} 
+              className="bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-700 border border-slate-200 hover:border-rose-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+              title="Unduh langsung laporan ke PDF"
+            >
+              <FileDown className="w-3.5 h-3.5 text-rose-600" /> Unduh PDF
+            </button>
+            <button 
+              type="button"
+              onClick={handlePrint} 
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition shadow-xs cursor-pointer whitespace-nowrap"
+            >
+              <Printer className="w-3.5 h-3.5" /> Cetak PDF
+            </button>
           </div>
         </div>
 
@@ -479,7 +496,7 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
         </div>
 
         {/* Content List */}
-        <div className="p-6 overflow-y-auto bg-slate-50 flex-1 print:bg-white print:p-8 print:overflow-visible">
+        <div className="p-4 sm:p-6 overflow-y-auto bg-slate-50/80 flex-1 space-y-5 print:bg-white print:p-8 print:overflow-visible">
           {/* Pre-Print Settings Panel (Shown before clicking Pratinjau / Cetak / Unduh PDF) */}
           {showPrePrintPanel && (
             <div className="mb-6 bg-white rounded-2xl border border-indigo-200 p-4 grid grid-cols-1 lg:grid-cols-12 gap-4 shadow-sm print:hidden">
@@ -535,193 +552,197 @@ const StudentDetailModal: React.FC<StudentDetailModalProps> = ({ student, violat
             </div>
           )}
 
-          {/* Structured Biodata Card (Screen Only) */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6 shadow-xs print:hidden">
-            <h3 className="text-xs font-extrabold uppercase tracking-wider text-indigo-700 mb-3 flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4" /> Biodata Lengkap Siswa
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 text-xs">
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
-                <div className="text-[10px] font-bold uppercase text-slate-400">NIS / NISN</div>
-                <div className="font-mono font-bold text-slate-800 mt-0.5">{student.nis} / {student.nisn || '-'}</div>
-              </div>
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
-                <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><Hash className="w-3 h-3" /> Kelas &amp; No. Absen</div>
-                <div className="font-bold text-slate-800 mt-0.5">{student.class} &bull; Absen {student.absenNumber || '-'}</div>
-              </div>
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
-                <div className="text-[10px] font-bold uppercase text-slate-400">Jenis Kelamin &amp; Status</div>
-                <div className="font-bold text-slate-800 mt-0.5 flex items-center gap-2">
-                  <span>{student.gender === 'L' ? 'Laki-laki' : 'Perempuan'}</span>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full border ${getStatusBadgeClasses(getStudentStatus(student))}`}>
-                    {getStudentStatus(student)}
-                  </span>
+          {/* Structured Biodata Card (Screen Only - Clean Single-Elevation Grid) */}
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden print:hidden">
+            <div className="px-4 py-2.5 bg-slate-50/70 border-b border-slate-200/80 flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-indigo-600" /> Biodata Lengkap Siswa
+              </h3>
+            </div>
+            <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-x-6 gap-y-3.5 text-xs">
+              <div className="lg:col-span-4">
+                <div className="text-[11px] font-medium text-slate-400 flex items-center gap-1">
+                  <UserIcon className="w-3 h-3" /> Wali Kelas
                 </div>
+                <div className="font-semibold text-slate-800 mt-0.5">{student.waliKelas || '-'}</div>
               </div>
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
-                <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><UserIcon className="w-3 h-3" /> Wali Kelas</div>
-                <div className="font-bold text-slate-800 mt-0.5">{student.waliKelas || '-'}</div>
+              <div className="lg:col-span-4">
+                <div className="text-[11px] font-medium text-slate-400 flex items-center gap-1">
+                  <UserIcon className="w-3 h-3" /> Guru BK
+                </div>
+                <div className="font-semibold text-slate-800 mt-0.5">{student.guruBk || '-'}</div>
               </div>
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
-                <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><UserIcon className="w-3 h-3" /> Guru BK</div>
-                <div className="font-bold text-slate-800 mt-0.5">{student.guruBk || '-'}</div>
+              <div className="lg:col-span-4">
+                <div className="text-[11px] font-medium text-slate-400 flex items-center gap-1">
+                  <Calendar className="w-3 h-3" /> Tempat, Tanggal Lahir
+                </div>
+                <div className="font-semibold text-slate-800 mt-0.5">{formatBirthPlaceDate(student.birthPlace, student.birthDate)}</div>
               </div>
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
-                <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><Calendar className="w-3 h-3" /> Tempat, Tanggal Lahir</div>
-                <div className="font-bold text-slate-800 mt-0.5">{formatBirthPlaceDate(student.birthPlace, student.birthDate)}</div>
+
+              <div className="lg:col-span-3 pt-2 border-t border-slate-100">
+                <div className="text-[11px] font-medium text-slate-400 flex items-center gap-1">
+                  <Phone className="w-3 h-3" /> No. HP / WhatsApp
+                </div>
+                <div className="font-mono font-semibold text-slate-800 mt-0.5 tabular-nums">{getStudentPhone(student) || '-'}</div>
               </div>
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
-                <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><Phone className="w-3 h-3" /> No. HP / WhatsApp</div>
-                <div className="font-mono font-bold text-slate-800 mt-0.5">{getStudentPhone(student) || '-'}</div>
+              <div className="lg:col-span-5 pt-2 border-t border-slate-100">
+                <div className="text-[11px] font-medium text-slate-400 flex items-center gap-1">
+                  <Mail className="w-3 h-3" /> Email
+                </div>
+                <div className="font-medium text-slate-800 mt-0.5 break-all">{student.email || '-'}</div>
               </div>
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
-                <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><Mail className="w-3 h-3" /> Email</div>
-                <div className="font-semibold text-slate-800 mt-0.5 truncate" title={student.email || '-'}>{student.email || '-'}</div>
-              </div>
-              <div className="bg-slate-50/80 p-3 rounded-xl border border-slate-100">
-                <div className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1"><MapPin className="w-3 h-3" /> Alamat Lengkap</div>
-                <div className="font-medium text-slate-800 mt-0.5">{student.address || '-'}</div>
+              <div className="sm:col-span-2 lg:col-span-4 pt-2 border-t border-slate-100">
+                <div className="text-[11px] font-medium text-slate-400 flex items-center gap-1">
+                  <MapPin className="w-3 h-3" /> Alamat Lengkap
+                </div>
+                <div className="font-medium text-slate-800 mt-0.5 leading-relaxed">{student.address || '-'}</div>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 print:hidden">
-            <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-              <Calendar className="w-5 h-5 text-slate-500" /> Riwayat Catatan Siswa
-            </h3>
+          <div>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-3.5 print:hidden">
+              <h3 className="font-bold text-slate-800 text-base sm:text-lg flex items-center gap-2">
+                <Calendar className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-600" /> Riwayat Catatan Siswa
+              </h3>
 
-            {/* Filter Toggle */}
-            <div className="flex bg-slate-200/80 p-1 rounded-xl">
-              <button
-                onClick={() => setActiveFilter('all')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  activeFilter === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Semua Catatan ({allStudentRecords.length})
-              </button>
-              <button
-                onClick={() => setActiveFilter('tardiness')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  activeFilter === 'tardiness' 
-                    ? 'bg-rose-600 text-white shadow-sm' 
-                    : tardinessInfo.isAlarm 
-                    ? 'text-red-600 font-extrabold animate-pulse' 
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Clock className="w-3.5 h-3.5" />
-                Keterlambatan ({tardinessInfo.count})
-                {tardinessInfo.isAlarm && (
-                  <span className="w-2 h-2 rounded-full bg-red-500 ring-2 ring-white"></span>
-                )}
-              </button>
+              {/* Filter Toggle */}
+              <div className="flex bg-slate-200/80 p-1 rounded-xl">
+                <button
+                  onClick={() => setActiveFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    activeFilter === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Semua Catatan ({allStudentRecords.length})
+                </button>
+                <button
+                  onClick={() => setActiveFilter('tardiness')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    activeFilter === 'tardiness' 
+                      ? 'bg-rose-600 text-white shadow-sm' 
+                      : tardinessInfo.isAlarm 
+                      ? 'text-red-600 font-extrabold' 
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  Keterlambatan ({tardinessInfo.count})
+                </button>
+              </div>
             </div>
-          </div>
 
-          {studentRecords.length === 0 ? (
-            <div className="text-center py-12 bg-white rounded-xl border border-slate-200 border-dashed print:border-black">
-               <p className="text-slate-400 print:text-black">
-                 {activeFilter === 'tardiness' 
-                   ? 'Siswa ini tidak memiliki catatan keterlambatan (Tertib).' 
-                   : 'Belum ada catatan pelanggaran atau prestasi.'}
-               </p>
-            </div>
-          ) : (
-            <div className="space-y-4 print:space-y-0">
-               {/* Print Table Header */}
-               <div className="hidden print:grid grid-cols-12 gap-2 font-bold text-sm border-b-2 border-black pb-2 mb-2">
-                  <div className="col-span-2">Tanggal</div>
-                  <div className="col-span-2">Kategori</div>
-                  <div className={appConfig.printSettings?.showPoints !== false ? 'col-span-6' : 'col-span-8'}>Deskripsi Kejadian</div>
-                  {appConfig.printSettings?.showPoints !== false && <div className="col-span-2 text-right">Poin</div>}
-               </div>
+            {studentRecords.length === 0 ? (
+              <div className="text-center py-10 bg-white rounded-xl border border-slate-200 border-dashed print:border-black">
+                 <p className="text-sm text-slate-400 print:text-black">
+                   {activeFilter === 'tardiness' 
+                     ? 'Siswa ini tidak memiliki catatan keterlambatan (Tertib).' 
+                     : 'Belum ada catatan pelanggaran atau prestasi.'}
+                 </p>
+              </div>
+            ) : (
+              <div className="space-y-3 print:space-y-0">
+                 {/* Print Table Header */}
+                 <div className="hidden print:grid grid-cols-12 gap-2 font-bold text-sm border-b-2 border-black pb-2 mb-2">
+                    <div className="col-span-2">Tanggal</div>
+                    <div className="col-span-2">Kategori</div>
+                    <div className={appConfig.printSettings?.showPoints !== false ? 'col-span-6' : 'col-span-8'}>Deskripsi Kejadian</div>
+                    {appConfig.printSettings?.showPoints !== false && <div className="col-span-2 text-right">Poin</div>}
+                 </div>
 
-               {studentRecords.map((record) => (
-                 <div 
-                    key={record.id} 
-                    className={`bg-white p-4 rounded-xl border shadow-sm flex flex-col md:flex-row gap-4 items-start md:items-center transition-all hover:shadow-md print:shadow-none print:rounded-none print:border-0 print:border-b print:border-black/50 print:p-2 print:grid print:grid-cols-12 print:gap-2 print:items-start
-                      ${record.category === ViolationCategory.PRESTASI ? 'border-green-300 ring-1 ring-green-100' : 'border-slate-200'}
-                    `}
-                 >
-                    {/* Screen View: Date */}
-                    <div className="flex-shrink-0 min-w-[100px] text-center md:text-left print:hidden">
-                       <span className="block text-xs font-bold text-black uppercase">{new Date(record.date).toLocaleDateString('id-ID', { month: 'short', year: 'numeric' })}</span>
-                       <span className="block text-xl font-bold text-black">{new Date(record.date).getDate()}</span>
-                       <span className="block text-xs text-black">{new Date(record.date).toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit'})}</span>
-                    </div>
+                 {studentRecords.map((record) => (
+                   <div 
+                      key={record.id} 
+                      className={`bg-white p-3.5 sm:p-4 rounded-xl border flex flex-col sm:flex-row gap-3 sm:gap-4 items-start sm:items-center transition-colors hover:border-slate-300 print:shadow-none print:rounded-none print:border-0 print:border-b print:border-black/50 print:p-2 print:grid print:grid-cols-12 print:gap-2 print:items-start
+                        ${record.category === ViolationCategory.PRESTASI ? 'border-emerald-200 bg-emerald-50/20' : 'border-slate-200'}
+                      `}
+                   >
+                      {/* Screen View: Date */}
+                      <div className="flex sm:flex-col items-baseline sm:items-center gap-2 sm:gap-0 flex-shrink-0 sm:w-20 sm:border-r sm:border-slate-100 sm:pr-4 text-left sm:text-center print:hidden tabular-nums">
+                         <span className="text-xs font-bold text-slate-500 uppercase order-2 sm:order-1">
+                           {new Date(record.date).toLocaleDateString('id-ID', { month: 'short', year: 'numeric' })}
+                         </span>
+                         <span className="text-lg sm:text-xl font-extrabold text-slate-900 leading-tight order-1 sm:order-2">
+                           {new Date(record.date).getDate()}
+                         </span>
+                         <span className="text-[11px] text-slate-400 order-3">
+                           {new Date(record.date).toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit'})}
+                         </span>
+                      </div>
 
-                     {/* Print View: Date */}
-                    <div className="hidden print:block col-span-2 text-sm text-black">
-                       {new Date(record.date).toLocaleDateString('id-ID')}
-                    </div>
+                       {/* Print View: Date */}
+                      <div className="hidden print:block col-span-2 text-sm text-black">
+                         {new Date(record.date).toLocaleDateString('id-ID')}
+                      </div>
 
-                    <div className="flex-1 print:col-span-8 print:grid print:grid-cols-8 print:gap-2">
-                       {/* Category */}
-                       <div className="flex flex-col gap-1 mb-1 print:col-span-2 print:mb-0">
-                          {record.category === ViolationCategory.PRESTASI ? (
-                             <span className="w-fit bg-green-100 text-green-900 border border-green-600 px-2 py-0.5 rounded text-xs font-bold flex items-center gap-1 print:border-0 print:p-0 print:bg-white print:text-black">
-                                <Award className="w-3 h-3 print:hidden" /> PRESTASI
-                             </span>
-                          ) : (
-                             <span className={`w-fit px-2 py-0.5 rounded text-xs font-bold flex items-center gap-1 bg-white text-black border print:border-0 print:p-0
-                                ${record.category === ViolationCategory.RINGAN ? 'border-yellow-500' :
-                                  record.category === ViolationCategory.SEDANG ? 'border-orange-500' :
-                                  'border-red-500'}
-                             `}>
-                                <AlertTriangle className="w-3 h-3 print:hidden" /> {record.category.toUpperCase()}
-                             </span>
-                          )}
-                          <span className="text-xs text-slate-500 print:hidden">Oleh: {record.reporterName}</span>
-                       </div>
-                       
-                       {/* Description */}
-                       <div className="print:col-span-6">
-                         <p className="text-black font-medium print:text-sm print:font-normal">{record.description}</p>
+                      <div className="flex-1 min-w-0 print:col-span-8 print:grid print:grid-cols-8 print:gap-2">
+                         {/* Category + Reporter */}
+                         <div className="flex flex-wrap items-center gap-2 mb-1.5 print:col-span-2 print:mb-0">
+                            {record.category === ViolationCategory.PRESTASI ? (
+                               <span className="w-fit bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md text-[11px] font-bold flex items-center gap-1 print:border-0 print:p-0 print:bg-white print:text-black">
+                                  <Award className="w-3 h-3 print:hidden" /> PRESTASI
+                               </span>
+                            ) : (
+                               <span className={`w-fit px-2 py-0.5 rounded-md text-[11px] font-bold flex items-center gap-1 border print:border-0 print:p-0 print:bg-white print:text-black
+                                  ${record.category === ViolationCategory.RINGAN ? 'bg-amber-50 text-amber-800 border-amber-200' :
+                                    record.category === ViolationCategory.SEDANG ? 'bg-orange-50 text-orange-800 border-orange-200' :
+                                    'bg-rose-50 text-rose-800 border-rose-200'}
+                               `}>
+                                  <AlertTriangle className="w-3 h-3 print:hidden" /> {record.category.toUpperCase()}
+                               </span>
+                            )}
+                            <span className="text-xs text-slate-500 print:hidden">Oleh: {record.reporterName}</span>
+                         </div>
                          
-                         {/* Explicit Label for Reward reducing points */}
-                         {record.category === ViolationCategory.PRESTASI && (
-                             <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-green-50 text-green-700 text-[10px] font-bold uppercase rounded border border-green-200 print:border-black print:text-black print:bg-white">
-                                <ArrowDownCircle className="w-3 h-3" /> Mengurangi Poin Pelanggaran
-                             </div>
-                         )}
+                         {/* Description */}
+                         <div className="print:col-span-6">
+                           <p className="text-sm text-slate-900 font-medium leading-snug print:text-sm print:font-normal">{record.description}</p>
+                           
+                           <div className="flex flex-wrap items-center gap-2 mt-2 empty:hidden">
+                             {/* Explicit Label for Reward reducing points */}
+                             {record.category === ViolationCategory.PRESTASI && (
+                                 <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase rounded border border-emerald-200 print:border-black print:text-black print:bg-white">
+                                    <ArrowDownCircle className="w-3 h-3" /> Mengurangi Poin Pelanggaran
+                                 </div>
+                             )}
 
-                         {/* Tardiness Badge */}
-                         {isTardinessRecord(record) && (
-                             <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-rose-50 text-rose-700 text-[10px] font-bold uppercase rounded border border-rose-200 print:border-black print:text-black print:bg-white">
-                                <Clock className="w-3 h-3 text-rose-600" /> Keterlambatan Masuk Sekolah
-                             </div>
-                         )}
+                             {/* Tardiness Badge */}
+                             {isTardinessRecord(record) && (
+                                 <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-50 text-rose-700 text-[10px] font-bold uppercase rounded border border-rose-200 print:border-black print:text-black print:bg-white">
+                                    <Clock className="w-3 h-3 text-rose-600" /> Keterlambatan Masuk Sekolah
+                                 </div>
+                             )}
 
-                         {record.evidenceUrl && (
-                            <div className="mt-2.5 print:hidden">
+                             {record.evidenceUrl && (
                                <button 
                                  type="button"
                                  onClick={() => setPreviewImage(record.evidenceUrl!)} 
-                                 className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg border border-indigo-200 transition shadow-xs"
+                                 className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-lg border border-indigo-200 transition cursor-pointer print:hidden"
                                  title="Klik untuk lihat & unduh bukti foto"
                                >
                                  <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
-                                 Lihat & Unduh Bukti Foto
+                                 Lihat &amp; Unduh Bukti Foto
                                </button>
-                            </div>
-                         )}
-                       </div>
-                    </div>
+                             )}
+                           </div>
+                         </div>
+                      </div>
 
-                    <div className={`flex-shrink-0 text-right print:col-span-2 ${appConfig.printSettings?.showPoints === false ? 'print:hidden' : ''}`}>
-                       <span className={`text-lg font-bold print:text-sm ${record.category === ViolationCategory.PRESTASI ? 'text-green-600' : 'text-red-600'} print:text-black`}>
-                          {record.category === ViolationCategory.PRESTASI ? '' : '+'}{record.points}
-                       </span>
-                    </div>
-                 </div>
-               ))}
-            </div>
-          )}
+                      <div className={`flex-shrink-0 flex sm:block items-center justify-between w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 text-right print:col-span-2 ${appConfig.printSettings?.showPoints === false ? 'print:hidden' : ''}`}>
+                         <span className="text-xs font-medium text-slate-400 sm:hidden">Poin</span>
+                         <span className={`text-lg font-extrabold tabular-nums print:text-sm ${record.category === ViolationCategory.PRESTASI ? 'text-emerald-600' : 'text-rose-600'} print:text-black`}>
+                            {record.category === ViolationCategory.PRESTASI ? '' : '+'}{record.points}
+                         </span>
+                      </div>
+                   </div>
+                 ))}
+              </div>
+            )}
+          </div>
         </div>
         
         {/* Footer */}
-        <div className="p-4 bg-white border-t border-slate-200 text-center text-xs text-slate-400 print:hidden">
+        <div className="px-4 py-2.5 bg-white border-t border-slate-200 text-center text-xs text-slate-500 print:hidden">
           Catatan: Prestasi (Poin Negatif) akan mengurangi total poin pelanggaran siswa.
         </div>
 
