@@ -299,28 +299,115 @@ export async function clearAllCloudStudents() {
   }
 }
 
-export async function bulkSaveCloudStudents(students: Student[]) {
-  if (students.length === 0) return;
-  const CHUNK_SIZE = 450;
-  for (let i = 0; i < students.length; i += CHUNK_SIZE) {
-    const batch = writeBatch(db);
-    students.slice(i, i + CHUNK_SIZE).forEach(s => {
-      const cleanStudent = Object.fromEntries(
-        Object.entries(s).filter(([_, v]) => v !== undefined)
-      );
-      batch.set(doc(db, 'students', s.id), cleanStudent);
-    });
-    await batch.commit();
+export interface BulkSaveResult {
+  total: number;
+  savedCount: number;
+  failedIds: string[];
+  errors: string[];
+}
+
+const delayMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function commitWithRetryAndFallback<T extends { id: string }>(
+  collectionName: 'students' | 'violations',
+  items: T[]
+): Promise<BulkSaveResult> {
+  if (items.length === 0) {
+    return { total: 0, savedCount: 0, failedIds: [], errors: [] };
   }
+
+  const MAX_CHUNK_OPS = 150;
+  const MAX_CHUNK_BYTES = 3_500_000; // Keep safely below Firestore's 10 MiB WriteBatch limit
+  const cleanedEntries = items.map((item) => {
+    const clean = sanitizeForFirestore(item);
+    const bytes = JSON.stringify(clean).length;
+    return { id: item.id, clean, bytes };
+  });
+
+  const chunks: Array<typeof cleanedEntries> = [];
+  let currentChunk: typeof cleanedEntries = [];
+  let currentBytes = 0;
+
+  for (const entry of cleanedEntries) {
+    if (
+      currentChunk.length > 0 &&
+      (currentChunk.length >= MAX_CHUNK_OPS || currentBytes + entry.bytes > MAX_CHUNK_BYTES)
+    ) {
+      chunks.push(currentChunk);
+      currentChunk = [];
+      currentBytes = 0;
+    }
+    currentChunk.push(entry);
+    currentBytes += entry.bytes;
+  }
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
+  let savedCount = 0;
+  const failedIds: string[] = [];
+  const errors: string[] = [];
+
+  for (const chunk of chunks) {
+    let committed = false;
+    let lastErr: unknown = null;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const batch = writeBatch(db);
+        chunk.forEach((entry) => {
+          batch.set(doc(db, collectionName, entry.id), entry.clean as any);
+        });
+        await batch.commit();
+        savedCount += chunk.length;
+        committed = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+        await delayMs(250 * (attempt + 1));
+      }
+    }
+
+    // Fallback to individual writes if a batch chunk failed (so 1 oversized/bad doc never drops the rest)
+    if (!committed) {
+      console.warn(`Batch commit fallback for ${collectionName} chunk (${chunk.length} items):`, lastErr);
+      for (const entry of chunk) {
+        let singleOk = false;
+        let singleErr: unknown = null;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            await setDoc(doc(db, collectionName, entry.id), entry.clean as any);
+            savedCount += 1;
+            singleOk = true;
+            break;
+          } catch (err) {
+            singleErr = err;
+            await delayMs(150);
+          }
+        }
+        if (!singleOk) {
+          failedIds.push(entry.id);
+          errors.push(singleErr instanceof Error ? singleErr.message : String(singleErr));
+        }
+      }
+    }
+  }
+
+  return {
+    total: items.length,
+    savedCount,
+    failedIds,
+    errors,
+  };
+}
+
+export async function bulkSaveCloudStudents(students: Student[]): Promise<BulkSaveResult> {
+  return commitWithRetryAndFallback('students', students);
 }
 
 export async function saveCloudViolation(violation: ViolationRecord) {
-  // Save violation document
-  // Note: Firestore does not accept undefined values, so clean undefined fields
-  const cleanViolation = Object.fromEntries(
-    Object.entries(violation).filter(([_, v]) => v !== undefined)
-  );
-  await setDoc(doc(db, 'violations', violation.id), cleanViolation);
+  const cleanViolation = sanitizeForFirestore(violation);
+  await setDoc(doc(db, 'violations', violation.id), cleanViolation as any);
 }
 
 export async function deleteCloudViolation(violationId: string) {
@@ -329,7 +416,7 @@ export async function deleteCloudViolation(violationId: string) {
 
 export async function bulkDeleteCloudViolations(violationIds: string[]) {
   if (violationIds.length === 0) return;
-  const CHUNK_SIZE = 450;
+  const CHUNK_SIZE = 200;
   for (let i = 0; i < violationIds.length; i += CHUNK_SIZE) {
     const batch = writeBatch(db);
     violationIds.slice(i, i + CHUNK_SIZE).forEach(id => {
@@ -339,19 +426,8 @@ export async function bulkDeleteCloudViolations(violationIds: string[]) {
   }
 }
 
-export async function bulkSaveCloudViolations(violations: ViolationRecord[]) {
-  if (violations.length === 0) return;
-  const CHUNK_SIZE = 450;
-  for (let i = 0; i < violations.length; i += CHUNK_SIZE) {
-    const batch = writeBatch(db);
-    violations.slice(i, i + CHUNK_SIZE).forEach(v => {
-      const cleanViolation = Object.fromEntries(
-        Object.entries(v).filter(([_, val]) => val !== undefined)
-      );
-      batch.set(doc(db, 'violations', v.id), cleanViolation);
-    });
-    await batch.commit();
-  }
+export async function bulkSaveCloudViolations(violations: ViolationRecord[]): Promise<BulkSaveResult> {
+  return commitWithRetryAndFallback('violations', violations);
 }
 
 export async function saveCloudUser(user: User) {

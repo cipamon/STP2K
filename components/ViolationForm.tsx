@@ -16,7 +16,7 @@ interface ViolationFormProps {
   students: Student[]; 
   violationTypes: ViolationType[];
   onSubmit: (record: ViolationRecord) => void;
-  onBulkUpload: (records: ViolationRecord[]) => void;
+  onBulkUpload: (records: ViolationRecord[]) => Promise<void> | void;
   appConfig: AppConfig;
   activeAcademicYear?: string;
 }
@@ -116,7 +116,7 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
     
     setIsSyncing(true);
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const data = new Uint8Array(event.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
@@ -134,21 +134,30 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
         const newRecords: ViolationRecord[] = [];
         let errorCount = 0;
 
+        const norm = (val: unknown) => String(val ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+
         rows.forEach((row: any, index) => {
+           if (!Array.isArray(row) || row.every((c) => c === undefined || c === null || String(c).trim() === '')) {
+             return;
+           }
            // Map columns: 0=Tanggal, 1=NIS, 2=Nama, 3=Kelas, 4=Kategori, 5=Deskripsi, 6=Poin
-           const vDateStr = row[0]?.toString().trim();
-           const vNis = row[1]?.toString().trim();
-           const vName = row[2]?.toString().trim();
-           const vClass = row[3]?.toString().trim();
+           const rawDateCell = row[0];
+           const vDateStr = rawDateCell?.toString().trim();
+           const vNis = norm(row[1]);
+           const vName = norm(row[2]);
+           const vClass = norm(row[3]);
            const vCategoryStr = row[4]?.toString().trim();
            const vDescription = row[5]?.toString().trim();
            const vPoints = Number(row[6]);
 
-           // Find student
-           let student = students.find(s => s.nis === vNis);
-           if (!student) {
-              // Try matching by name and class
-              student = students.find(s => s.name.toLowerCase() === vName?.toLowerCase() && s.class === vClass);
+           // Find student (NIS match, fallback to Name+Class, or unique Name)
+           let student = vNis && vNis !== '-' ? students.find(s => norm(s.nis) === vNis) : undefined;
+           if (!student && vName && vClass) {
+              student = students.find(s => norm(s.name) === vName && norm(s.class) === vClass);
+           }
+           if (!student && vName) {
+              const nameMatches = students.filter(s => norm(s.name) === vName);
+              if (nameMatches.length === 1) student = nameMatches[0];
            }
 
            if (student && vDescription && !isNaN(vPoints)) {
@@ -159,9 +168,13 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
               else if (catLower?.includes('berat')) vCategory = ViolationCategory.BERAT;
               else if (catLower?.includes('prestasi') || catLower?.includes('reward')) vCategory = ViolationCategory.PRESTASI;
 
-              // Parse date
+              // Parse date (supports Excel serial dates & text dates)
               let finalDate = new Date().toISOString();
-              if (vDateStr) {
+              if (typeof rawDateCell === 'number' && Number.isFinite(rawDateCell) && rawDateCell > 1000 && rawDateCell < 100000) {
+                 const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+                 const dt = new Date(excelEpoch.getTime() + rawDateCell * 86400000);
+                 if (!isNaN(dt.getTime())) finalDate = dt.toISOString();
+              } else if (vDateStr) {
                  const parsedDate = new Date(vDateStr);
                  if (!isNaN(parsedDate.getTime())) {
                     finalDate = parsedDate.toISOString();
@@ -169,7 +182,7 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
               }
 
               newRecords.push({
-                 id: Date.now().toString() + index + Math.random().toString(36).substr(2, 5),
+                 id: `${Date.now()}-${index}-${Math.random().toString(36).substring(2, 7)}`,
                  studentId: student.id,
                  studentName: student.name,
                  studentClass: student.class,
@@ -187,7 +200,7 @@ const ViolationForm: React.FC<ViolationFormProps> = ({ currentUser, students, vi
         });
 
         if (newRecords.length > 0) {
-          onBulkUpload(newRecords);
+          await onBulkUpload(newRecords);
           setShowImportModal(false);
           setSelectedExcelFile(null);
           if (errorCount > 0) {

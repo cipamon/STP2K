@@ -5,7 +5,7 @@ import { Student, User, UserRole, ViolationRecord, ViolationType, ThemeName, App
 import { INITIAL_ACTIVITIES } from './utils/activityLogger';
 import ViolationForm from './components/ViolationForm';
 import Dashboard from './components/Dashboard';
-import StudentList from './components/StudentList';
+import StudentList, { StudentImportMeta } from './components/StudentList';
 import UserManagement from './components/UserManagement';
 import ViolationTypeManagement from './components/ViolationTypeManagement';
 import StudentDetailModal from './components/StudentDetailModal';
@@ -318,13 +318,21 @@ const App: React.FC = () => {
     return MOCK_STUDENTS;
   });
 
-  // Persist students and violations to localStorage
+  // Persist students and violations to localStorage (guarded against QuotaExceededError for large datasets)
   useEffect(() => {
-    localStorage.setItem('siPersis_students', JSON.stringify(students));
+    try {
+      localStorage.setItem('siPersis_students', JSON.stringify(students));
+    } catch (err) {
+      console.warn('localStorage siPersis_students limit reached (Cloud Firestore remains primary):', err);
+    }
   }, [students]);
 
   useEffect(() => {
-    localStorage.setItem('siPersis_violations', JSON.stringify(violations));
+    try {
+      localStorage.setItem('siPersis_violations', JSON.stringify(violations));
+    } catch (err) {
+      console.warn('localStorage siPersis_violations limit reached:', err);
+    }
   }, [violations]);
 
   // User Activities State with persistence
@@ -342,7 +350,11 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
-    localStorage.setItem('siPersis_user_activities', JSON.stringify(activities));
+    try {
+      localStorage.setItem('siPersis_user_activities', JSON.stringify(activities));
+    } catch (err) {
+      console.warn('localStorage siPersis_user_activities limit reached:', err);
+    }
   }, [activities]);
 
   const logActivity = (act: Omit<UserActivityLog, 'id' | 'timestamp'>) => {
@@ -358,7 +370,11 @@ const App: React.FC = () => {
 
   const handleClearActivities = () => {
     setActivities([]);
-    localStorage.setItem('siPersis_user_activities', JSON.stringify([]));
+    try {
+      localStorage.setItem('siPersis_user_activities', JSON.stringify([]));
+    } catch {
+      // ignore
+    }
     clearCloudActivities().catch(err => console.warn('Cloud clear activities error:', err));
     toast.success('Riwayat aktivitas berhasil dibersihkan di seluruh akun!');
   };
@@ -378,7 +394,11 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
-    localStorage.setItem('siPersis_users', JSON.stringify(users));
+    try {
+      localStorage.setItem('siPersis_users', JSON.stringify(users));
+    } catch (err) {
+      console.warn('localStorage siPersis_users limit reached:', err);
+    }
   }, [users]);
 
   // Cloud Synchronization state
@@ -403,6 +423,7 @@ const App: React.FC = () => {
   const violationsRef = useRef<ViolationRecord[]>(violations);
   const appConfigRef = useRef<AppConfig>(appConfig);
   const hasReconciledBootRef = useRef<boolean>(false);
+  const isBulkUploadingRef = useRef<boolean>(false);
 
   useEffect(() => {
     studentsRef.current = students;
@@ -715,6 +736,7 @@ const App: React.FC = () => {
 
         // Real-time Students Listener (Semua akun melihat data siswa yang sama & selalu sinkron poin/catatan)
         unsubscribeStudents = subscribeToStudents((remoteStudents) => {
+          if (isBulkUploadingRef.current) return;
           if (Array.isArray(remoteStudents)) {
             writeIdSet(KNOWN_CLOUD_STUDENT_IDS_KEY, remoteStudents.map(s => s.id));
             const reconciled = reconcileStudentsAndViolations(
@@ -731,6 +753,7 @@ const App: React.FC = () => {
 
         // Real-time Violations Listener (Semua guru & admin melihat laporan yang sama & poin siswa selalu akurat)
         unsubscribeViolations = subscribeToViolations((remoteViolations) => {
+          if (isBulkUploadingRef.current) return;
           if (Array.isArray(remoteViolations)) {
             writeIdSet(KNOWN_CLOUD_VIOLATION_IDS_KEY, remoteViolations.map(v => v.id));
             const reconciled = reconcileStudentsAndViolations(
@@ -1209,95 +1232,155 @@ const App: React.FC = () => {
     });
   };
 
-  const handleBulkUploadStudents = (newStudents: Student[]) => {
-    const { result, insertedCount, updatedExistingCount } = mergeImportedStudents(
-      studentsRef.current,
-      newStudents,
-      violationsRef.current,
-      effectiveInputAcademicYear
-    );
-    studentsRef.current = result.students;
-    violationsRef.current = result.violations;
-    setStudents(result.students);
-    setViolations(result.violations);
+  const handleBulkUploadStudents = async (newStudents: Student[], importMeta?: StudentImportMeta) => {
+    isBulkUploadingRef.current = true;
+    setIsSyncing(true);
+    try {
+      const {
+        result,
+        insertedCount,
+        updatedExistingCount,
+        duplicateInFileCount,
+        sameNisDifferentNameCount,
+      } = mergeImportedStudents(
+        studentsRef.current,
+        newStudents,
+        violationsRef.current,
+        effectiveInputAcademicYear
+      );
+      studentsRef.current = result.students;
+      violationsRef.current = result.violations;
+      setStudents(result.students);
+      setViolations(result.violations);
 
-    if (result.updatedStudents.length > 0) {
-      bulkSaveCloudStudents(result.updatedStudents).catch(err => {
-        console.warn('Cloud bulk save students error:', err);
-        queuePendingMutation({ upsertStudents: result.updatedStudents.map(s => s.id) });
-      });
-    }
-    if (result.updatedViolations.length > 0) {
-      bulkSaveCloudViolations(result.updatedViolations).catch(err => {
-        console.warn('Cloud relink violations error:', err);
-        queuePendingMutation({ upsertViolations: result.updatedViolations.map(v => v.id) });
-      });
-    }
-    if (result.deletedDuplicateStudentIds.length > 0) {
-      bulkDeleteCloudStudents(result.deletedDuplicateStudentIds).catch(err => {
-        queuePendingMutation({ deleteStudents: result.deletedDuplicateStudentIds });
-      });
-    }
+      let failedStudentCount = 0;
+      if (result.updatedStudents.length > 0) {
+        try {
+          const saveRes = await bulkSaveCloudStudents(result.updatedStudents);
+          if (saveRes.failedIds.length > 0) {
+            failedStudentCount = saveRes.failedIds.length;
+            queuePendingMutation({ upsertStudents: saveRes.failedIds });
+          }
+        } catch (err) {
+          console.warn('Cloud bulk save students error:', err);
+          failedStudentCount = result.updatedStudents.length;
+          queuePendingMutation({ upsertStudents: result.updatedStudents.map(s => s.id) });
+        }
+      }
+      if (result.updatedViolations.length > 0) {
+        try {
+          const vioRes = await bulkSaveCloudViolations(result.updatedViolations);
+          if (vioRes.failedIds.length > 0) {
+            queuePendingMutation({ upsertViolations: vioRes.failedIds });
+          }
+        } catch (err) {
+          console.warn('Cloud relink violations error:', err);
+          queuePendingMutation({ upsertViolations: result.updatedViolations.map(v => v.id) });
+        }
+      }
+      if (result.deletedDuplicateStudentIds.length > 0) {
+        bulkDeleteCloudStudents(result.deletedDuplicateStudentIds).catch(err => {
+          queuePendingMutation({ deleteStudents: result.deletedDuplicateStudentIds });
+        });
+      }
 
-    toast.success(
-      `${insertedCount} siswa baru & ${updatedExistingCount} siswa lama disinkronkan ke TA ${effectiveInputAcademicYear}!`
-    );
+      writeIdSet(KNOWN_CLOUD_STUDENT_IDS_KEY, result.students.map(s => s.id));
 
-    logActivity({
-      userId: currentUser?.id || 'anon',
-      userName: currentUser?.name || 'Admin',
-      userRole: currentUser?.role || UserRole.ADMIN,
-      userAvatar: currentUser?.avatar,
-      action: 'BULK_IMPORT',
-      title: 'Impor & Sinkronisasi Massal Siswa via Excel',
-      details: `Menambahkan ${insertedCount} siswa baru dan menyinkronkan ${updatedExistingCount} siswa tercatat sebelumnya untuk TA ${effectiveInputAcademicYear}`,
-      device: 'Browser Web'
-    });
+      const notes: string[] = [];
+      if (updatedExistingCount > 0) notes.push(`${updatedExistingCount} siswa lama diperbarui`);
+      if (duplicateInFileCount > 0) notes.push(`${duplicateInFileCount} baris duplikat dalam file digabung`);
+      if (importMeta && importMeta.skippedRowsCount > 0) {
+        notes.push(`${importMeta.skippedRowsCount} baris dilewati karena Nama kosong (baris ${importMeta.skippedRowSamples.join(', ')})`);
+      }
+      if (sameNisDifferentNameCount > 0) {
+        notes.push(`${sameNisDifferentNameCount} siswa dengan NIS kembar tapi nama berbeda tetap disimpan terpisah`);
+      }
+
+      const summaryHeadline = `${insertedCount} siswa baru berhasil diunggah ke TA ${effectiveInputAcademicYear}${notes.length > 0 ? ` (${notes.join('; ')})` : ''}.`;
+      if (failedStudentCount > 0) {
+        toast.warning(`${summaryHeadline} Catatan: ${failedStudentCount} data menunggu sinkronisasi Cloud ulang (klik Sinkronkan).`, { duration: 8000 });
+      } else {
+        toast.success(summaryHeadline, { duration: 6000 });
+      }
+
+      logActivity({
+        userId: currentUser?.id || 'anon',
+        userName: currentUser?.name || 'Admin',
+        userRole: currentUser?.role || UserRole.ADMIN,
+        userAvatar: currentUser?.avatar,
+        action: 'BULK_IMPORT',
+        title: 'Impor & Sinkronisasi Massal Siswa via Excel',
+        details: `Terbaca ${newStudents.length} baris: ${insertedCount} siswa baru, ${updatedExistingCount} siswa lama diperbarui, ${duplicateInFileCount} duplikat file untuk TA ${effectiveInputAcademicYear}`,
+        device: 'Browser Web'
+      });
+    } finally {
+      isBulkUploadingRef.current = false;
+      setIsSyncing(false);
+    }
   };
 
-  const handleBulkUploadViolations = (newViolations: ViolationRecord[]) => {
-    const taggedViolations = newViolations.map(v => ({
-      ...v,
-      academicYear: v.academicYear || effectiveInputAcademicYear,
-    }));
-    const reconciled = reconcileStudentsAndViolations(
-      studentsRef.current,
-      [...taggedViolations, ...violationsRef.current],
-      appConfig.academicYear
-    );
-    studentsRef.current = reconciled.students;
-    violationsRef.current = reconciled.violations;
-    setViolations(reconciled.violations);
-    setStudents(reconciled.students);
+  const handleBulkUploadViolations = async (newViolations: ViolationRecord[]) => {
+    isBulkUploadingRef.current = true;
+    setIsSyncing(true);
+    try {
+      const taggedViolations = newViolations.map(v => ({
+        ...v,
+        academicYear: v.academicYear || effectiveInputAcademicYear,
+      }));
+      const reconciled = reconcileStudentsAndViolations(
+        studentsRef.current,
+        [...taggedViolations, ...violationsRef.current],
+        appConfig.academicYear
+      );
+      studentsRef.current = reconciled.students;
+      violationsRef.current = reconciled.violations;
+      setViolations(reconciled.violations);
+      setStudents(reconciled.students);
 
-    const importedIds = new Set(taggedViolations.map(v => v.id));
-    const violationsToSave = reconciled.violations.filter(v => importedIds.has(v.id));
+      const importedIds = new Set(taggedViolations.map(v => v.id));
+      const violationsToSave = reconciled.violations.filter(v => importedIds.has(v.id));
 
-    if (violationsToSave.length > 0) {
-      bulkSaveCloudViolations(violationsToSave).catch(err => {
-        console.warn('Cloud bulk save violations error:', err);
-        queuePendingMutation({ upsertViolations: violationsToSave.map(v => v.id) });
+      if (violationsToSave.length > 0) {
+        try {
+          const vioRes = await bulkSaveCloudViolations(violationsToSave);
+          if (vioRes.failedIds.length > 0) {
+            queuePendingMutation({ upsertViolations: vioRes.failedIds });
+          }
+        } catch (err) {
+          console.warn('Cloud bulk save violations error:', err);
+          queuePendingMutation({ upsertViolations: violationsToSave.map(v => v.id) });
+        }
+      }
+      if (reconciled.updatedStudents.length > 0) {
+        try {
+          const stuRes = await bulkSaveCloudStudents(reconciled.updatedStudents);
+          if (stuRes.failedIds.length > 0) {
+            queuePendingMutation({ upsertStudents: stuRes.failedIds });
+          }
+        } catch (err) {
+          console.warn('Cloud bulk update touched students error:', err);
+          queuePendingMutation({ upsertStudents: reconciled.updatedStudents.map(s => s.id) });
+        }
+      }
+
+      writeIdSet(KNOWN_CLOUD_VIOLATION_IDS_KEY, reconciled.violations.map(v => v.id));
+      
+      toast.success(`${taggedViolations.length} data laporan berhasil diimpor ke TA ${effectiveInputAcademicYear} & disinkronkan!`);
+
+      logActivity({
+        userId: currentUser?.id || 'anon',
+        userName: currentUser?.name || 'Admin',
+        userRole: currentUser?.role || UserRole.ADMIN,
+        userAvatar: currentUser?.avatar,
+        action: 'BULK_IMPORT',
+        title: 'Impor Massal Laporan via Excel',
+        details: `Berhasil mengimpor ${newViolations.length} catatan pelanggaran & reward siswa`,
+        device: 'Browser Web'
       });
+    } finally {
+      isBulkUploadingRef.current = false;
+      setIsSyncing(false);
     }
-    if (reconciled.updatedStudents.length > 0) {
-      bulkSaveCloudStudents(reconciled.updatedStudents).catch(err => {
-        console.warn('Cloud bulk update touched students error:', err);
-        queuePendingMutation({ upsertStudents: reconciled.updatedStudents.map(s => s.id) });
-      });
-    }
-    
-    toast.success(`${taggedViolations.length} data laporan berhasil diimpor ke TA ${effectiveInputAcademicYear} & disinkronkan!`);
-
-    logActivity({
-      userId: currentUser?.id || 'anon',
-      userName: currentUser?.name || 'Admin',
-      userRole: currentUser?.role || UserRole.ADMIN,
-      userAvatar: currentUser?.avatar,
-      action: 'BULK_IMPORT',
-      title: 'Impor Massal Laporan via Excel',
-      details: `Berhasil mengimpor ${newViolations.length} catatan pelanggaran & reward siswa`,
-      device: 'Browser Web'
-    });
   };
 
   const handleBulkDeleteStudents = (ids: string[]) => {

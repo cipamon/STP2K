@@ -58,13 +58,22 @@ import { exportAoaToSpreadsheet, exportRowsToSpreadsheet } from '../utils/export
 import { loadStudentPdfPhoto, PdfImageAsset } from '../utils/pdfImages';
 import { StudentAvatar } from './StudentAvatar';
 
+export interface StudentImportMeta {
+  totalRowsInFile: number;
+  parsedCount: number;
+  skippedRowsCount: number;
+  skippedRowSamples: number[];
+  missingNisCount: number;
+  missingClassCount: number;
+}
+
 interface StudentListProps {
   students: Student[];
   violations?: ViolationRecord[];
   onAddStudent: (student: Student) => void;
   onUpdateStudent: (student: Student) => void;
   onDeleteStudent: (id: string) => void;
-  onBulkUpload: (students: Student[]) => void;
+  onBulkUpload: (students: Student[], importMeta?: StudentImportMeta) => Promise<void> | void;
   onBulkDeleteStudents: (ids: string[]) => void;
   onDeleteAllStudents?: () => void;
   onDeleteStudentsByClass?: (className: string) => void;
@@ -526,11 +535,11 @@ const StudentList: React.FC<StudentListProps> = ({
 
     setIsSyncing(true);
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const data = new Uint8Array(event.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        processWorkbook(workbook);
+        await processWorkbook(workbook);
       } catch (err) {
         console.error('Excel Read Error:', err);
         toast.error('Gagal membaca file Excel. Pastikan file tidak rusak.');
@@ -545,7 +554,7 @@ const StudentList: React.FC<StudentListProps> = ({
     reader.readAsArrayBuffer(selectedExcelFile);
   };
 
-  const processWorkbook = (workbook: XLSX.WorkBook) => {
+  const processWorkbook = async (workbook: XLSX.WorkBook) => {
     try {
       if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
         toast.error('File tidak valid atau kosong.');
@@ -554,59 +563,106 @@ const StudentList: React.FC<StudentListProps> = ({
 
       const firstSheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[firstSheetName];
-      const jsonData = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
+      const jsonData = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '' });
       if (jsonData.length < 2) {
         toast.error('File tidak memiliki baris data siswa.');
         return;
       }
 
-      const headerRow = (jsonData[0] || []).map((h) =>
-        String(h || '')
+      const normalizeHeader = (val: unknown) =>
+        String(val || '')
           .trim()
           .toUpperCase()
-          .replace(/[\s_]+/g, '_')
-      );
+          .replace(/[\s]+/g, '_');
 
-      // Detect column indices by header name
-      const findCol = (aliases: string[]) =>
-        headerRow.findIndex((h) => aliases.some((a) => h === a || h.includes(a)));
-
-      const colIdx = {
-        nis: findCol(['NIS']),
-        nisn: findCol(['NISN']),
-        name: findCol(['NAMA', 'NAMA_LENGKAP', 'NAMA_SISWA']),
-        class: findCol(['KELAS', 'ROMBEL']),
-        absen: findCol(['NO_ABSEN', 'ABSEN', 'NO._ABSEN', 'NOMOR_ABSEN']),
-        birthPlace: findCol(['TEMPAT', 'TEMPAT_LAHIR', 'TMP_LAHIR']),
-        birthDate: findCol(['TANGGAL_LAHIR', 'TGL_LAHIR', 'LAHIR']),
-        email: findCol(['EMAIL', 'E-MAIL', 'SUREL']),
-        photo: findCol(['FOTO', 'PHOTO', 'URL_FOTO', 'PHOTO_URL']),
-        address: findCol(['ALAMAT', 'ADDRESS']),
-        phone: findCol(['NO_HP', 'HP', 'NO_TELEPON', 'TELEPON', 'WA', 'NO_WA']),
-        gender: findCol(['JENIS_KELAMIN', 'L/P', 'JK', 'GENDER', 'KELAMIN']),
-        status: findCol(['STATUS', 'STATUS_SISWA']),
-        waliKelas: findCol(['WALI_KELAS', 'WALI', 'WALIKELAS']),
-        guruBk: findCol(['GURU_BK', 'BK', 'KONSELOR', 'PEMBIMBING_BK']),
-      };
-
-      // Fix NIS matching NISN if NIS column came after or NISN matched first
-      if (colIdx.nis === colIdx.nisn) {
-        const exactNis = headerRow.findIndex((h) => h === 'NIS');
-        const exactNisn = headerRow.findIndex((h) => h === 'NISN');
-        if (exactNis !== -1) colIdx.nis = exactNis;
-        if (exactNisn !== -1) colIdx.nisn = exactNisn;
+      // Scan first 10 rows to locate the actual table header row (in case there is a title/kop row at top)
+      let headerRowIndex = 0;
+      for (let r = 0; r < Math.min(10, jsonData.length); r += 1) {
+        const candidate = (jsonData[r] || []).map(normalizeHeader);
+        const hasNameCol = candidate.some((h) => h === 'NAMA' || h === 'NAMA_LENGKAP' || h === 'NAMA_SISWA');
+        const hasIdOrClassCol = candidate.some(
+          (h) => h === 'NIS' || h === 'NISN' || h === 'KELAS' || h === 'ROMBEL'
+        );
+        if (hasNameCol && hasIdOrClassCol) {
+          headerRowIndex = r;
+          break;
+        }
       }
 
-      const hasFullHeader = colIdx.nis !== -1 && colIdx.name !== -1 && colIdx.class !== -1;
+      const headerRow = (jsonData[headerRowIndex] || []).map(normalizeHeader);
+      const usedCols = new Set<number>();
 
-      const rows = jsonData.slice(1);
+      // 3-tier column detector: exact match -> token match -> safe partial match
+      // Prevents e.g. "JENIS_KELAMIN" from accidentally matching alias "NIS"!
+      const findCol = (aliases: string[], forbiddenSubstrings: string[] = []): number => {
+        const isForbidden = (h: string) => forbiddenSubstrings.some((f) => h.includes(f));
+
+        // 1. Exact header match
+        const exactIdx = headerRow.findIndex((h, idx) => !usedCols.has(idx) && aliases.includes(h));
+        if (exactIdx !== -1) {
+          usedCols.add(exactIdx);
+          return exactIdx;
+        }
+
+        // 2. Word/token match (e.g. NAMA_LENGKAP matches NAMA, NO_ABSEN matches ABSEN, JENIS_KELAMIN does NOT match NIS)
+        const tokenIdx = headerRow.findIndex((h, idx) => {
+          if (usedCols.has(idx) || isForbidden(h)) return false;
+          const tokens = h.split(/[_\s./-]+/).filter(Boolean);
+          return aliases.some((a) => {
+            const aliasTokens = a.split(/[_\s./-]+/).filter(Boolean);
+            return aliasTokens.every((at) => tokens.includes(at));
+          });
+        });
+        if (tokenIdx !== -1) {
+          usedCols.add(tokenIdx);
+          return tokenIdx;
+        }
+
+        // 3. Safe substring fallback
+        const partialIdx = headerRow.findIndex(
+          (h, idx) => !usedCols.has(idx) && !isForbidden(h) && aliases.some((a) => h.includes(a))
+        );
+        if (partialIdx !== -1) {
+          usedCols.add(partialIdx);
+          return partialIdx;
+        }
+        return -1;
+      };
+
+      const colIdx = {
+        nisn: findCol(['NISN']),
+        nis: findCol(['NIS', 'NO_INDUK', 'NOMOR_INDUK'], ['NISN', 'JENIS']),
+        name: findCol(['NAMA_LENGKAP', 'NAMA_SISWA', 'NAMA'], ['WALI', 'ORTU', 'ORANG_TUA', 'AYAH', 'IBU']),
+        class: findCol(['KELAS', 'ROMBEL'], ['WALI']),
+        absen: findCol(['NO_ABSEN', 'NOMOR_ABSEN', 'NO._ABSEN', 'ABSEN']),
+        birthPlace: findCol(['TEMPAT_LAHIR', 'TMP_LAHIR', 'TEMPAT'], ['TINGGAL']),
+        birthDate: findCol(['TANGGAL_LAHIR', 'TGL_LAHIR', 'LAHIR']),
+        email: findCol(['EMAIL', 'E-MAIL', 'SUREL']),
+        photo: findCol(['URL_FOTO', 'PHOTO_URL', 'FOTO', 'PHOTO']),
+        address: findCol(['ALAMAT', 'ALAMAT_LENGKAP', 'ADDRESS']),
+        phone: findCol(['NO_HP', 'NO_WA', 'NO_TELEPON', 'TELEPON', 'WHATSAPP', 'HP', 'WA']),
+        gender: findCol(['JENIS_KELAMIN', 'L/P', 'JK', 'GENDER', 'KELAMIN']),
+        status: findCol(['STATUS_SISWA', 'STATUS']),
+        waliKelas: findCol(['WALI_KELAS', 'WALIKELAS', 'WALI']),
+        guruBk: findCol(['GURU_BK', 'PEMBIMBING_BK', 'KONSELOR', 'BK']),
+      };
+
+      const hasFullHeader = colIdx.name !== -1 && (colIdx.nis !== -1 || colIdx.class !== -1 || colIdx.nisn !== -1);
+
+      const rows = jsonData.slice(headerRowIndex + 1);
       const newStudents: Student[] = [];
+      let totalRowsInFile = 0;
+      let skippedRowsCount = 0;
+      const skippedRowSamples: number[] = [];
+      let missingNisCount = 0;
+      let missingClassCount = 0;
 
       rows.forEach((row: any, index) => {
         if (!Array.isArray(row) || row.every((c) => c === undefined || c === null || String(c).trim() === '')) {
           return;
         }
 
+        const excelRowNum = headerRowIndex + 2 + index;
         const cell = (idx: number) => (idx >= 0 && row[idx] !== undefined && row[idx] !== null ? String(row[idx]).trim() : '');
 
         let snis = '';
@@ -665,39 +721,65 @@ const StudentList: React.FC<StudentListProps> = ({
           }
         }
 
-        if (snis && sname && sclass) {
-          newStudents.push({
-            id: `${Date.now()}-${index}-${Math.random().toString(36).substring(2, 7)}`,
-            nis: snis,
-            nisn: snisn || '-',
-            name: sname,
-            class: sclass,
-            absenNumber: sabsen || undefined,
-            birthPlace: sbirthPlace || undefined,
-            birthDate: sbirthDate || undefined,
-            email: semail || undefined,
-            photoUrl: sphoto || undefined,
-            address: saddress || undefined,
-            phone: sphone || undefined,
-            parentPhone: sphone || undefined,
-            gender: normalizeGender(sgenderRaw),
-            status: normalizeStudentStatus(sstatusRaw),
-            waliKelas: swaliKelas || undefined,
-            guruBk: sguruBk || undefined,
-            totalPoints: 0,
-            academicYear: targetAcademicYear,
-          });
+        // Ignore repeated header rows inside sheet
+        if (
+          snis.toUpperCase() === 'NIS' &&
+          (sname.toUpperCase().includes('NAMA') || sclass.toUpperCase() === 'KELAS')
+        ) {
+          return;
         }
+
+        totalRowsInFile += 1;
+
+        if (!sname) {
+          skippedRowsCount += 1;
+          if (skippedRowSamples.length < 10) {
+            skippedRowSamples.push(excelRowNum);
+          }
+          return;
+        }
+
+        if (!snis) missingNisCount += 1;
+        if (!sclass) missingClassCount += 1;
+
+        newStudents.push({
+          id: `${Date.now()}-${index}-${Math.random().toString(36).substring(2, 7)}`,
+          nis: snis || '-',
+          nisn: snisn || '-',
+          name: sname,
+          class: sclass || 'Belum Diatur',
+          absenNumber: sabsen || undefined,
+          birthPlace: sbirthPlace || undefined,
+          birthDate: sbirthDate || undefined,
+          email: semail || undefined,
+          photoUrl: sphoto || undefined,
+          address: saddress || undefined,
+          phone: sphone || undefined,
+          parentPhone: sphone || undefined,
+          gender: normalizeGender(sgenderRaw),
+          status: normalizeStudentStatus(sstatusRaw),
+          waliKelas: swaliKelas || undefined,
+          guruBk: sguruBk || undefined,
+          totalPoints: 0,
+          academicYear: targetAcademicYear,
+        });
       });
 
       if (newStudents.length > 0) {
-        onBulkUpload(newStudents);
+        await onBulkUpload(newStudents, {
+          totalRowsInFile,
+          parsedCount: newStudents.length,
+          skippedRowsCount,
+          skippedRowSamples,
+          missingNisCount,
+          missingClassCount,
+        });
         setIsModalOpen(false);
         setGoogleSheetUrl('');
         setSelectedExcelFile(null);
       } else {
         toast.error(
-          'Gagal membaca data. Pastikan kolom minimal berisi NIS, Nama, dan Kelas sesuai Template Excel.'
+          'Gagal membaca data. Pastikan tabel memiliki kolom Nama dan NIS/Kelas sesuai Template Excel.'
         );
       }
     } catch (error) {
@@ -729,7 +811,7 @@ const StudentList: React.FC<StudentListProps> = ({
 
       const arrayBuffer = await response.arrayBuffer();
       const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
-      processWorkbook(workbook);
+      await processWorkbook(workbook);
     } catch (error: any) {
       toast.error(`Error: ${error.message}`);
     } finally {

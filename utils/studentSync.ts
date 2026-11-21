@@ -29,8 +29,70 @@ const normalizeText = (value?: string): string =>
 
 const normalizeNis = (nis?: string): string => {
   const cleaned = (nis || '').trim();
-  if (!cleaned || cleaned === '-' || cleaned === '0') return '';
-  return cleaned.toLowerCase();
+  if (!cleaned) return '';
+  const lower = cleaned.toLowerCase();
+  if (
+    /^[-—_#.*]+$/.test(cleaned) ||
+    /^0+$/.test(cleaned) ||
+    lower === 'null' ||
+    lower === 'undefined' ||
+    lower === 'n/a' ||
+    lower === 'na' ||
+    lower === 'belum' ||
+    lower === 'belum ada' ||
+    lower === 'tidak ada'
+  ) {
+    return '';
+  }
+  return lower;
+};
+
+const normalizeNameForCompare = (name?: string): string =>
+  (name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const levenshteinDistance = (a: string, b: string): number => {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const dp: number[] = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const temp = dp[j];
+      if (a[i - 1] === b[j - 1]) {
+        dp[j] = prev;
+      } else {
+        dp[j] = Math.min(prev, dp[j], dp[j - 1]) + 1;
+      }
+      prev = temp;
+    }
+  }
+  return dp[b.length];
+};
+
+/**
+ * Prevents merging two completely different students who happen to share
+ * a duplicate/typo NIS in Excel (e.g. copy-paste mistake).
+ */
+const namesCompatibleForNisMerge = (nameA?: string, nameB?: string): boolean => {
+  const a = normalizeNameForCompare(nameA);
+  const b = normalizeNameForCompare(nameB);
+  if (!a || !b) return true;
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen > 0) {
+    const dist = levenshteinDistance(a, b);
+    if (1 - dist / maxLen >= 0.8) return true;
+  }
+  return false;
 };
 
 const pickBestText = (primary?: string, secondary?: string): string | undefined => {
@@ -138,8 +200,9 @@ export function reconcileStudentsAndViolations(
   const idRemap = new Map<string, string>();
   const deletedDuplicateStudentIds: string[] = [];
 
-  // Deduplicate students by (academicYear + normalized NIS) or (academicYear + normalized Name + normalized Class when NIS empty)
-  const keyToCanonicalIndex = new Map<string, number>();
+  // Deduplicate genuine duplicate students in same academic year (same NIS+compatible name, or same Name+Class)
+  const nisKeyToIndices = new Map<string, number[]>();
+  const nameClassKeyToIndex = new Map<string, number>();
   const canonicalStudents: Student[] = [];
 
   // Sort copy slightly so students with existing violation references or richer data come first when deduplicating
@@ -166,15 +229,19 @@ export function reconcileStudentsAndViolations(
     const nameClassKey = normName && normClass ? `nc:${targetYear}|${normName}|${normClass}` : '';
 
     let existingIdx: number | undefined;
-    if (nisKey && keyToCanonicalIndex.has(nisKey)) {
-      existingIdx = keyToCanonicalIndex.get(nisKey);
-    } else if (!nisKey && nameClassKey && keyToCanonicalIndex.has(nameClassKey)) {
-      existingIdx = keyToCanonicalIndex.get(nameClassKey);
-    } else if (nameClassKey && keyToCanonicalIndex.has(nameClassKey)) {
-      const candidate = canonicalStudents[keyToCanonicalIndex.get(nameClassKey)!];
+    if (nisKey && nisKeyToIndices.has(nisKey)) {
+      const candidateIndices = nisKeyToIndices.get(nisKey)!;
+      existingIdx = candidateIndices.find((idx) =>
+        namesCompatibleForNisMerge(canonicalStudents[idx].name, raw.name)
+      );
+    }
+
+    if (existingIdx === undefined && nameClassKey && nameClassKeyToIndex.has(nameClassKey)) {
+      const candidateIdx = nameClassKeyToIndex.get(nameClassKey)!;
+      const candidate = canonicalStudents[candidateIdx];
       const candidateNis = normalizeNis(candidate.nis);
-      if (!candidateNis || candidateNis === normNis) {
-        existingIdx = keyToCanonicalIndex.get(nameClassKey);
+      if (!candidateNis || !normNis || candidateNis === normNis) {
+        existingIdx = candidateIdx;
       }
     }
 
@@ -186,8 +253,12 @@ export function reconcileStudentsAndViolations(
         mergedDuplicatesCount += 1;
       }
       canonicalStudents[existingIdx] = mergeStudentRecords(primary, raw, targetYear);
-      if (nisKey) keyToCanonicalIndex.set(nisKey, existingIdx);
-      if (nameClassKey) keyToCanonicalIndex.set(nameClassKey, existingIdx);
+      if (nisKey) {
+        const list = nisKeyToIndices.get(nisKey) || [];
+        if (!list.includes(existingIdx)) list.push(existingIdx);
+        nisKeyToIndices.set(nisKey, list);
+      }
+      if (nameClassKey) nameClassKeyToIndex.set(nameClassKey, existingIdx);
     } else {
       const normalizedPhoto = normalizePhotoUrl(raw.photoUrl || raw.avatar) || undefined;
       const cleanStudent: Student = {
@@ -205,8 +276,12 @@ export function reconcileStudentsAndViolations(
       };
       const newIdx = canonicalStudents.length;
       canonicalStudents.push(cleanStudent);
-      if (nisKey) keyToCanonicalIndex.set(nisKey, newIdx);
-      if (nameClassKey) keyToCanonicalIndex.set(nameClassKey, newIdx);
+      if (nisKey) {
+        const list = nisKeyToIndices.get(nisKey) || [];
+        list.push(newIdx);
+        nisKeyToIndices.set(nisKey, list);
+      }
+      if (nameClassKey) nameClassKeyToIndex.set(nameClassKey, newIdx);
     }
   });
 
@@ -381,11 +456,16 @@ export function mergeImportedStudents(
   result: ReconcileResult;
   insertedCount: number;
   updatedExistingCount: number;
+  duplicateInFileCount: number;
+  sameNisDifferentNameCount: number;
 } {
   const year = normalizeAcademicYearFormat(targetAcademicYear);
+  const existingIdSet = new Set(existingStudents.map((s) => s.id));
+  const updatedExistingIds = new Set<string>();
   const working = [...existingStudents];
   let insertedCount = 0;
-  let updatedExistingCount = 0;
+  let duplicateInFileCount = 0;
+  let sameNisDifferentNameCount = 0;
 
   incomingStudents.forEach((inc) => {
     const incYear = getRecordAcademicYear(inc.academicYear, year);
@@ -393,11 +473,18 @@ export function mergeImportedStudents(
     const incName = normalizeText(inc.name);
     const incClass = normalizeText(inc.class);
 
+    let sawDifferentNameWithSameNis = false;
     const existingIdx = working.findIndex((s) => {
       const sYear = getRecordAcademicYear(s.academicYear, year);
       if (sYear !== incYear) return false;
       const sNis = normalizeNis(s.nis);
-      if (incNis && sNis && incNis === sNis) return true;
+      if (incNis && sNis && incNis === sNis) {
+        if (namesCompatibleForNisMerge(s.name, inc.name)) {
+          return true;
+        }
+        sawDifferentNameWithSameNis = true;
+        return false;
+      }
       return Boolean(incName && incClass && normalizeText(s.name) === incName && normalizeText(s.class) === incClass);
     });
 
@@ -418,8 +505,15 @@ export function mergeImportedStudents(
         existing,
         incYear
       );
-      updatedExistingCount += 1;
+      if (existingIdSet.has(existing.id)) {
+        updatedExistingIds.add(existing.id);
+      } else {
+        duplicateInFileCount += 1;
+      }
     } else {
+      if (sawDifferentNameWithSameNis) {
+        sameNisDifferentNameCount += 1;
+      }
       working.unshift({
         ...inc,
         academicYear: incYear,
@@ -429,5 +523,11 @@ export function mergeImportedStudents(
   });
 
   const result = reconcileStudentsAndViolations(working, violations, year);
-  return { result, insertedCount, updatedExistingCount };
+  return {
+    result,
+    insertedCount,
+    updatedExistingCount: updatedExistingIds.size,
+    duplicateInFileCount,
+    sameNisDifferentNameCount,
+  };
 }
